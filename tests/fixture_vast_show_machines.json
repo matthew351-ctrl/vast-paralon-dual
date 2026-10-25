@@ -10,6 +10,9 @@
       "listed_storage_cost": 0.333,
       "listed_inet_up_cost": 0.00390625,
       "listed_inet_down_cost": 0.0029296875,
+      "listed_min_gpu_count": 1,
+      "credit_discount_max": 0.0,
+      "duration": null,
       "end_date": 1798761600.0
     }
   ]

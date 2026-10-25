@@ -207,7 +207,7 @@ class VastCLITests(unittest.TestCase):
         self.assertEqual(m.listing_terms, {
             "price_gpu": 0.43, "price_min_bid": 0.38, "price_disk": 0.333,
             "price_inetu": 4.0 / 1024, "price_inetd": 3.0 / 1024,
-            "end_date": 1798761600.0})
+            "min_chunk": 1, "end_date": 1798761600.0})
 
     def test_relist_args_from_saved_terms(self):
         r = FakeRunner(fixture("fixture_vast_show_machines.json"))
@@ -217,7 +217,7 @@ class VastCLITests(unittest.TestCase):
             "list", "machine", "12345", "--price_gpu", "0.43",
             "--price_min_bid", "0.38", "--price_disk", "0.333",
             "--price_inetu", "0.00390625", "--price_inetd", "0.0029296875",
-            "--end_date", "1798761600"])
+            "--min_chunk", "1", "--end_date", "1798761600"])
 
     def test_one_bad_record_only_fails_that_machine(self):
         r = FakeRunner({"machines": [machine(), {"id": 222}]})

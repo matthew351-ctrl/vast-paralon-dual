@@ -33,8 +33,13 @@ SAVED_FIELDS = {
     "listed_storage_cost": "price_disk",
     "listed_inet_up_cost": "price_inetu",
     "listed_inet_down_cost": "price_inetd",
+    "listed_min_gpu_count": "min_chunk",   # --min_chunk resets to 1 otherwise
     "end_date": "end_date",
+    "duration": "duration",                # seconds when the offer is rolling
 }
+INT_KEYS = ("min_chunk", "vol_size")
+# Not saved: Vast's row has no field that holds --discount_rate (its default
+# is 0.4). A host who uses one sets it in the config vast_listing.
 
 
 def _num(value):
@@ -42,6 +47,19 @@ def _num(value):
         return None if value is None else float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _arg(key, val):
+    """One `list machine` value as the CLI wants it: whole numbers for the
+    integer flags and a numeric `duration` (seconds); prices and dates with
+    10 significant digits, so 0.09999999999999998 goes out as 0.1."""
+    if isinstance(val, bool):
+        return str(int(val))
+    if isinstance(val, (int, float)):
+        if key in INT_KEYS or key == "duration":
+            return str(int(val))
+        return f"{float(val):.10g}"
+    return str(val)
 
 
 @dataclass
@@ -58,8 +76,9 @@ class VastMachine:
         terms = {}
         for src, key in SAVED_FIELDS.items():
             val = _num(self.raw.get(src))
-            if val is not None:
-                terms[key] = val
+            if val is None or (key == "duration" and val <= 0):
+                continue
+            terms[key] = int(val) if key in INT_KEYS else val
         return terms
 
     @classmethod
@@ -141,9 +160,7 @@ class VastCLI:
             val = listing.get(key)
             if val is None:
                 continue
-            if key == "end_date" and isinstance(val, float) and val.is_integer():
-                val = int(val)      # unix seconds, as the CLI expects
-            args += [flag, str(val)]
+            args += [flag, _arg(key, val)]
         return args
 
     def list_machine(self, machine_id, listing):

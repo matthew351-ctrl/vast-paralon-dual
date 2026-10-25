@@ -30,8 +30,11 @@ it is not given. Config prices are only a fallback when nothing was saved; if
 neither has a GPU price and min bid, the relist holds.
 """
 
+import fcntl
 import logging
+import os
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .config import REQUIRED_PRICES
@@ -106,13 +109,40 @@ class Controller:
         self.store.save(self.state)
         self._dirty = False
 
+    def reload(self):
+        """Re-read the state file. The service and a `mode` command run as
+        separate processes on one file: without this the service kept the
+        state it loaded at start and wrote it back over a mode change."""
+        if self.dry_run:
+            return                  # a dry run is short-lived; keep its view
+        self.state = self.store.load([m.vast_machine_id for m in self.cfg.machines])
+        self._dirty = False
+
+    @contextmanager
+    def locked(self):
+        """One pass at a time across processes (`run` and `mode`), so the two
+        never act on the same machine at once. A dry run takes no lock."""
+        if self.dry_run:
+            yield
+            return
+        path = self.store.path + ".lock"
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+
     def set_mode(self, mode, machine_id=None):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
-        for m in self.targets(machine_id):
-            self.mstate(m)["mode"] = mode
-            self._decide(m, f"mode set to {mode}")
-        self._save()
+        with self.locked():
+            self.reload()
+            for m in self.targets(machine_id):
+                self.mstate(m)["mode"] = mode
+                self._decide(m, f"mode set to {mode}")
+            self._save()
 
     # -- one pass ------------------------------------------------------
     def read(self):
@@ -123,6 +153,11 @@ class Controller:
         return vms, nodes
 
     def poll(self, machine_id=None):
+        with self.locked():
+            self.reload()
+            return self._poll(machine_id)
+
+    def _poll(self, machine_id):
         targets = self.targets(machine_id)
         self.pass_decisions = []
         active = []
@@ -242,10 +277,19 @@ class Controller:
         listing = dict(m.vast_listing)
         saved = dict(self.mstate(m)["saved_listing"] or {})
         end = saved.pop("end_date", None)
+        rolling = saved.pop("duration", None)
         listing.update(saved)
-        if end is not None and end > self.clock():
+        # ONE offer end, never two (the CLI refuses both). A machine listed
+        # with a rolling `duration` must come back rolling: Vast reports it
+        # as `duration` seconds, and relisting with the absolute end_date
+        # instead would turn a "14 days, extended daily" offer into one that
+        # expires on a fixed date (seen on the first live test).
+        if isinstance(rolling, (int, float)) and rolling > 0:
+            listing["duration"] = int(rolling)
+            listing.pop("end_date", None)
+        elif end is not None and end > self.clock():
             listing["end_date"] = end
-            listing.pop("duration", None)  # one offer end, not two
+            listing.pop("duration", None)
         if any(not isinstance(listing.get(k), (int, float))
                for k in REQUIRED_PRICES):
             return None

@@ -94,6 +94,9 @@ def _check_listing(listing, where):
     for key in NUMERIC_KEYS:
         if key in listing and not isinstance(listing[key], (int, float)):
             raise ConfigError(f"\"{where}.{key}\" must be a number")
+    if "end_date" in listing and "duration" in listing:
+        raise ConfigError(f"\"{where}\": set end_date OR duration, not both "
+                          "(vastai refuses the pair)")
     return {k: v for k, v in listing.items() if not k.startswith("_")}
 
 

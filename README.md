@@ -117,7 +117,9 @@ vast_paralon_dual.py [-c CONFIG] service
 - `status`: per machine, both sides, owed relists, the listing a relist would
   use, what the next pass would do and the last decisions. Writes nothing.
 - `mode`: saves the mode for one machine (or all) and applies it once. The
-  running service picks it up on its next pass.
+  running service re-reads the state file at the start of every pass, so it
+  follows the change from its next pass; a lock file next to the state file
+  stops the two acting on a machine at the same moment.
   - `dual`: listed on both (the rules below).
   - `vast`: Paralon paused, Vast listed.
   - `paralon`: Vast unlisted, Paralon available once no Vast renter is
@@ -155,9 +157,15 @@ Switching modes does not end a rental already running on either side.
 
 Just before it unlists a Vast machine, the tool saves that machine's current
 listing from the same read: GPU price, min bid, disk price, upload and
-download bandwidth prices, and the offer end date. The relist passes all of
-them back (`vastai list machine` resets any term it is not given). If the
-saved offer end has passed by then, the config's `duration` is used instead.
+download bandwidth prices, minimum GPU chunk, and the offer end. The relist
+passes all of them back (`vastai list machine` resets any term it is not
+given). A rolling offer (`--duration`, extended daily by Vast) is relisted as
+rolling; a fixed end date is relisted as that date, or, if it has passed by
+then, with the config's `duration`.
+
+Vast's machine record does not report a listing's `--discount_rate`, so if
+you use one, set it in the config `vast_listing` or it relists at Vast's
+default (0.4).
 
 Config prices are only a fallback, for terms nothing was saved for, for
 example a machine you unlisted by hand before installing and then switch to
@@ -184,7 +192,7 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | --- | --- |
 | `on_paralon_rental` | `keep_vast_listed` or `unlist_vast` (required) |
 | `machines` | list of `{vast_machine_id, paralon_node_id}`, each with an optional `vast_listing` that overrides the top-level one |
-| `vast_listing` | optional fallback listing terms (see Relist prices); keys map to `vastai list machine` flags: `price_gpu`, `price_min_bid`, `price_disk`, `price_inetu`, `price_inetd`, `discount_rate`, `min_chunk`, `end_date` or `duration`, `vol_size`, `vol_price` |
+| `vast_listing` | optional fallback listing terms (see Relist prices); keys map to `vastai list machine` flags: `price_gpu`, `price_min_bid`, `price_disk`, `price_inetu`, `price_inetd`, `discount_rate`, `min_chunk`, `end_date` or `duration` (not both), `vol_size`, `vol_price` |
 | `state_file` | default `~/.local/state/vast-paralon-dual/state.json` |
 | `poll_interval_s` | seconds between passes (default 60) |
 | `paralon_min_get_interval_s` | minimum seconds between `GET /nodes` (default 60) |

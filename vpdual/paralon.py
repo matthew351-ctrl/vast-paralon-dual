@@ -127,6 +127,7 @@ class ParalonClient:
             if wait > MAX_WAIT_FOR_SLOT_S:
                 raise ParalonError(
                     f"local rate limit ({self.max_calls_per_min}/min) reached")
+            log.info("Paralon rate limit: waiting %.0fs for a call slot", wait)
             self._sleep(wait)
             now = self._clock()
             self._calls = [t for t in self._calls if now - t < 60]
