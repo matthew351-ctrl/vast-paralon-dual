@@ -6,10 +6,53 @@ or switch each one fully to one of them. A Vast renter always wins the GPU.
 Python 3 standard library only, plus Vast's official `vastai` CLI. It never
 touches the Vast daemon, its packages or its containers.
 
+## Before you start
+
+This tool switches listings; it does not install Paralon. Each GPU machine
+needs, first:
+
+1. **A Vast host that works today** (the Vast daemon running, the machine
+   verified on Vast).
+2. **A Paralon node with its agent running on that machine.** Create the node
+   in the Paralon dashboard, set it to **spot**, and run the agent install
+   command it gives you on the machine. Check the dashboard shows the node
+   online and verified.
+3. **Docker 29.2 or newer** on the machine. On a Vast host the NVIDIA runtime is
+   in CDI mode, and older Docker cannot give the Paralon agent the GPU. Upgrade
+   Docker following Vast's own host instructions.
+4. **An NVIDIA CDI spec that matches the GPUs actually installed.** If the
+   machine's GPUs ever change (a card added, removed or powered off), the old
+   spec still lists them and the Paralon agent fails to start with
+   `invoking the NVIDIA Container Runtime Hook directly ... is not supported`.
+   Regenerate it:
+
+   ```sh
+   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+   docker restart paralon-agent
+   ```
+
+## Where to run it
+
+Either works; the setup below is the same.
+
+- **On a control plane** (any always-on Linux box: a server, a Raspberry Pi):
+  one install manages many machines. List each machine's Vast id and Paralon
+  node id in one config (`init` pairs them for you). It talks to Vast through
+  the `vastai` CLI and to Paralon through its API, so it never needs to log in
+  to the GPU machines. Reacts within about a minute (one check per minute).
+- **On the GPU machine itself:** one install, that machine in the config. Good
+  for a single machine with nothing else always on. Here you can also turn on
+  `"docker_events": true`, which wakes the watcher the moment a container
+  starts, so it reacts in seconds instead of up to a minute.
+
+Either way, the Paralon agent always runs on each GPU machine: that is
+Paralon's software doing the rental. This tool only decides where each machine
+is listed.
+
 ## Quick start
 
-Run these as your normal user on the GPU machine (or any always-on Linux box
-that can reach both APIs):
+Run these as your normal user on the control plane or the GPU machine (see
+above):
 
 ```sh
 # 1. Install
