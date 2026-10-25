@@ -1,25 +1,22 @@
 {
-  "_comment": "Copy to /etc/vast-paralon-dual/config.json and edit. Keys starting with _ are ignored.",
-
-  "vast_machine_id": 12345,
-  "paralon_node_id": "your-paralon-node-id",
+  "_comment": "`init` writes this file for you (~/.config/vast-paralon-dual/config.json). Keys starting with _ are ignored.",
 
   "_on_paralon_rental": "REQUIRED, no default. keep_vast_listed = Vast stays listed while Paralon is rented (a Vast booking reclaims the Paralon spot rental). unlist_vast = Vast is unlisted while Paralon is rented and relisted afterwards.",
   "on_paralon_rental": "CHOOSE keep_vast_listed OR unlist_vast",
 
-  "_vast_listing": "Used for every relist. An unlisted Vast machine reports no live price, so your prices must live here. Keys map to `vastai list machine` flags.",
+  "machines": [
+    {"vast_machine_id": 12345, "paralon_node_id": "your-paralon-node-id"},
+    {"vast_machine_id": 12346, "paralon_node_id": "another-node-id",
+     "vast_listing": {"price_gpu": 0.60, "price_min_bid": 0.45}}
+  ],
+
+  "_vast_listing": "OPTIONAL fallbacks. Before unlisting, the tool saves the machine's own listing (GPU price, min bid, disk, bandwidth, offer end) and relists with that. These values are used only for terms nothing was saved for, e.g. a machine you unlisted by hand. A machine's own vast_listing overrides this one.",
   "vast_listing": {
     "price_gpu": 0.40,
     "price_min_bid": 0.30,
-    "price_disk": 0.10,
     "duration": "14 days"
   },
 
-  "state_file": "/var/lib/vast-paralon-dual/state.json",
   "poll_interval_s": 60,
-  "paralon_min_get_interval_s": 60,
-  "paralon_max_calls_per_min": 4,
-  "reclaim_retry_s": 300,
-  "vastai_bin": "vastai",
   "docker_events": false
 }

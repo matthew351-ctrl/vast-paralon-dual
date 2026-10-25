@@ -20,6 +20,9 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger("vpdual.paralon")
 
+from . import __version__
+
+USER_AGENT = f"vast-paralon-dual/{__version__}"
 BACKOFF_STATUSES = {409, 429}
 BACKOFF_BASE_S = 30
 BACKOFF_MAX_S = 600
@@ -56,8 +59,14 @@ class ParalonNode:
     def price_text(self):
         p = self.price
         if isinstance(p, dict):
-            amount = p.get("custom") if p.get("custom") is not None \
-                else p.get("default")
+            # What a renter actually pays: renter_pays (a spot node pays less
+            # than the default), else the custom price, else the default.
+            for key in ("renter_pays", "custom", "default"):
+                if p.get(key) is not None:
+                    amount = p[key]
+                    break
+            else:
+                amount = "?"
             return f"{amount} {p.get('currency', '')}/{p.get('unit', 'hour')}"
         return str(p)
 
@@ -139,6 +148,9 @@ class ParalonClient:
                                      method=method)
         req.add_header("Authorization", "Bearer " + self._api_key)
         req.add_header("Accept", "application/json")
+        # Paralon's edge refuses Python's default "Python-urllib/x.y" agent
+        # with HTTP 403 (found on the first real run), so name the tool.
+        req.add_header("User-Agent", USER_AGENT)
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:

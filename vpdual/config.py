@@ -177,8 +177,26 @@ def parse_config(raw, env=None):
     return cfg
 
 
+def key_from_env_file(cfg_path):
+    """PARALON_API_KEY from the `env` file `init` writes next to the config,
+    so hand-run commands work without exporting the key."""
+    try:
+        with open(os.path.join(os.path.dirname(cfg_path), "env"),
+                  encoding="utf-8") as fh:
+            for line in fh:
+                name, sep, value = line.strip().partition("=")
+                if sep and name.strip() == "PARALON_API_KEY":
+                    return value.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
 def load_config(path, env=None):
     path = os.path.expanduser(path)
+    env = dict(os.environ if env is None else env)
+    if not env.get("PARALON_API_KEY", "").strip():
+        env["PARALON_API_KEY"] = key_from_env_file(os.path.abspath(path))
     try:
         with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)

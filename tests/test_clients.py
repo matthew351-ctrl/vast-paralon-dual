@@ -13,7 +13,7 @@ from vpdual.engine import Controller
 from vpdual.paralon import ParalonClient, ParalonError
 from vpdual.vast import VastCLI, VastError
 
-from helpers import TempDirMixin, make_config
+from helpers import TempDirMixin, fixture, make_config
 
 KEY = "prlc_super_secret_key"
 
@@ -146,6 +146,31 @@ class ParalonClientTests(unittest.TestCase):
         self.assertNotIn(KEY, repr(make_config("/x")))
 
 
+class ParalonFixtureTests(unittest.TestCase):
+    """The real GET /nodes shape (tests/fixture_paralon_nodes.json)."""
+
+    def test_parses_real_nodes_payload(self):
+        http, clock = FakeHTTP(fixture("fixture_paralon_nodes.json")), Clock()
+        nodes = paralon(http, clock).list_nodes()
+        self.assertEqual(len(nodes), 1)
+        n = nodes[0]
+        self.assertEqual(n.id, "00000000-0000-0000-0000-000000000001")
+        self.assertEqual(n.state, "rented")
+        self.assertTrue(n.available)
+        self.assertTrue(n.spot)
+        self.assertTrue(n.rented)
+        self.assertEqual(n.price_text, "0.477 USD/hour")
+        self.assertIn("RTX 4090", n.label)
+
+    def test_ended_rental_record_is_not_rented(self):
+        data = fixture("fixture_paralon_nodes.json")
+        item = data["nodes"][0]
+        item["state"] = "available"
+        item["rental"]["status"] = "ended"
+        http, clock = FakeHTTP(data), Clock()
+        self.assertFalse(paralon(http, clock).list_nodes()[0].rented)
+
+
 class FakeRunner:
     def __init__(self, machines):
         self.machines = machines
@@ -172,6 +197,33 @@ class VastCLITests(unittest.TestCase):
             m = VastCLI(runner=r).read_machine(111)
             self.assertEqual((m.listed, m.running, m.resident), (True, 0, 2))
             self.assertEqual(r.calls[0], ["vastai", "show", "machines", "--raw"])
+
+    def test_parses_real_show_machines_payload(self):
+        r = FakeRunner(fixture("fixture_vast_show_machines.json"))
+        machines = VastCLI(runner=r).read_machines()
+        self.assertEqual(r.calls, [["vastai", "show", "machines", "--raw"]])
+        m = machines[12345]
+        self.assertEqual((m.listed, m.running, m.resident), (True, 1, 2))
+        self.assertEqual(m.listing_terms, {
+            "price_gpu": 0.43, "price_min_bid": 0.38, "price_disk": 0.333,
+            "price_inetu": 4.0 / 1024, "price_inetd": 3.0 / 1024,
+            "end_date": 1798761600.0})
+
+    def test_relist_args_from_saved_terms(self):
+        r = FakeRunner(fixture("fixture_vast_show_machines.json"))
+        cli = VastCLI(runner=r)
+        terms = cli.read_machines()[12345].listing_terms
+        self.assertEqual(cli.list_args(12345, terms), [
+            "list", "machine", "12345", "--price_gpu", "0.43",
+            "--price_min_bid", "0.38", "--price_disk", "0.333",
+            "--price_inetu", "0.00390625", "--price_inetd", "0.0029296875",
+            "--end_date", "1798761600"])
+
+    def test_one_bad_record_only_fails_that_machine(self):
+        r = FakeRunner({"machines": [machine(), {"id": 222}]})
+        machines = VastCLI(runner=r).read_machines()
+        self.assertTrue(machines[111].listed)
+        self.assertIsInstance(machines[222], VastError)
 
     def test_list_uses_configured_prices(self):
         r = FakeRunner([])
@@ -221,6 +273,39 @@ class EndToEnd(TempDirMixin, unittest.TestCase):
         self.assertEqual([c[1] for c in runner.calls], ["show"])
         self.assertFalse(os.path.exists(self.state_path))
 
+    def test_real_fixtures_unlist_save_and_relist(self):
+        """Both real payload shapes through the engine: the Vast terms are
+        saved on unlist and passed back in full on relist."""
+        vast_data = fixture("fixture_vast_show_machines.json")
+        vast_data["machines"][0]["current_rentals_running"] = 0
+        nodes = fixture("fixture_paralon_nodes.json")
+        node_id = nodes["nodes"][0]["id"]
+        http, clock, runner = FakeHTTP(nodes), Clock(), FakeRunner(vast_data)
+        cfg = make_config(self.state_path, "unlist_vast",
+                          machines=[(12345, node_id)], listing={})
+        ctl = Controller(cfg, VastCLI(runner=runner), paralon(http, clock),
+                         self.store, clock=lambda: 1793000000.0)
+        ctl.set_mode("dual")
+        ctl.poll()
+        self.assertEqual(runner.calls[-1], ["vastai", "unlist", "machine",
+                                            "12345"])
+        saved = self.mstate(12345)["saved_listing"]
+        self.assertEqual(saved["price_disk"], 0.333)
+        # Paralon rental ends; Vast reports the machine unlisted (no terms).
+        vast_data["machines"][0].update(listed=False, listed_gpu_cost=None)
+        nodes["nodes"][0].update(state="available", rental=None)
+        clock.t += 61
+        ctl.poll()
+        self.assertEqual(runner.calls[-1][:3], ["vastai", "list", "machine"])
+        for flag, val in (("--price_gpu", "0.43"), ("--price_min_bid", "0.38"),
+                          ("--price_disk", "0.333"),
+                          ("--price_inetu", "0.00390625"),
+                          ("--price_inetd", "0.0029296875"),
+                          ("--end_date", "1798761600")):
+            i = runner.calls[-1].index(flag)
+            self.assertEqual(runner.calls[-1][i + 1], val)
+        self.assertIsNone(self.mstate(12345)["saved_listing"])
+
     def test_live_rule1_reclaims_and_pauses(self):
         ctl, http, runner = self.build(
             [node(state="rented", rental={"id": "r"})],
@@ -254,15 +339,47 @@ class ConfigTests(TempDirMixin, unittest.TestCase):
         with self.assertRaises(ConfigError):
             load_config(self.write(data), env={"PARALON_API_KEY": KEY})
 
-    def test_requires_relist_price(self):
+    def test_relist_prices_are_optional(self):
         data = self.good()
-        del data["vast_listing"]["price_min_bid"]
-        with self.assertRaisesRegex(ConfigError, "price_min_bid"):
-            load_config(self.write(data), env={"PARALON_API_KEY": KEY})
+        del data["vast_listing"]
+        cfg = load_config(self.write(data), env={"PARALON_API_KEY": KEY})
+        self.assertEqual(cfg.machines[0].vast_listing, {})
+
+    def test_old_single_machine_keys_still_load(self):
+        cfg = load_config(self.write(self.good()), env={"PARALON_API_KEY": KEY})
+        self.assertEqual([(m.vast_machine_id, m.paralon_node_id)
+                          for m in cfg.machines], [(1, "n")])
+
+    def test_machines_list_with_per_machine_override(self):
+        data = {"on_paralon_rental": "keep_vast_listed",
+                "vast_listing": {"price_gpu": 0.5, "price_min_bid": 0.3},
+                "machines": [
+                    {"vast_machine_id": 1, "paralon_node_id": "a"},
+                    {"vast_machine_id": "2", "paralon_node_id": "b",
+                     "vast_listing": {"price_gpu": 0.9}}]}
+        cfg = load_config(self.write(data), env={"PARALON_API_KEY": KEY})
+        self.assertEqual(cfg.machines[0].vast_listing["price_gpu"], 0.5)
+        self.assertEqual(cfg.machines[1].vast_machine_id, 2)
+        self.assertEqual(cfg.machines[1].vast_listing,
+                         {"price_gpu": 0.9, "price_min_bid": 0.3})
+
+    def test_refuses_duplicates_and_empty_list(self):
+        base = {"on_paralon_rental": "keep_vast_listed"}
+        for machines in ([], [{"vast_machine_id": 1, "paralon_node_id": "a"},
+                              {"vast_machine_id": 1, "paralon_node_id": "b"}]):
+            with self.assertRaises(ConfigError):
+                load_config(self.write(dict(base, machines=machines)),
+                            env={"PARALON_API_KEY": KEY})
 
     def test_requires_key(self):
         with self.assertRaisesRegex(ConfigError, "PARALON_API_KEY"):
             load_config(self.write(self.good()), env={})
+
+    def test_key_read_from_env_file_next_to_config(self):
+        path = self.write(self.good())
+        with open(os.path.join(self.tmp, "env"), "w") as fh:
+            fh.write(f"PARALON_API_KEY={KEY}\n")
+        self.assertEqual(load_config(path, env={}).paralon_api_key, KEY)
 
     def test_loads_and_example_is_valid(self):
         cfg = load_config(self.write(self.good()), env={"PARALON_API_KEY": KEY})
@@ -271,6 +388,11 @@ class ConfigTests(TempDirMixin, unittest.TestCase):
                                "config.example.json")
         with self.assertRaisesRegex(ConfigError, "on_paralon_rental"):
             load_config(example, env={"PARALON_API_KEY": KEY})
+        with open(example) as fh:
+            data = json.load(fh)
+        data["on_paralon_rental"] = "keep_vast_listed"
+        cfg = load_config(self.write(data), env={"PARALON_API_KEY": KEY})
+        self.assertEqual(len(cfg.machines), 2)
 
 
 if __name__ == "__main__":

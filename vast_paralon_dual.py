@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Run one GPU machine on Vast.ai and Paralon Cloud, or switch between them.
+"""Run GPU machines on Vast.ai and Paralon Cloud at once, or switch between them.
 
-    python3 vast_paralon_dual.py -c config.json mode dual
-    python3 vast_paralon_dual.py -c config.json run
-    python3 vast_paralon_dual.py -c config.json status
+    python3 vast_paralon_dual.py init        # pair machines, write the config
+    python3 vast_paralon_dual.py status      # both sides; what it would do
+    python3 vast_paralon_dual.py mode dual [VAST_MACHINE_ID]
+    python3 vast_paralon_dual.py run         # the watcher (the service)
+    python3 vast_paralon_dual.py service     # print the systemd unit
 """
 
 import sys

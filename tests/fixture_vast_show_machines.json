@@ -6,7 +6,11 @@
       "current_rentals_running": 1,
       "current_rentals_resident": 2,
       "listed_gpu_cost": 0.43,
-      "min_bid_price": 0.38
+      "min_bid_price": 0.38,
+      "listed_storage_cost": 0.333,
+      "listed_inet_up_cost": 0.00390625,
+      "listed_inet_down_cost": 0.0029296875,
+      "end_date": 1798761600.0
     }
   ]
 }

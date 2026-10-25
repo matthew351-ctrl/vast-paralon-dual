@@ -66,6 +66,7 @@ class Controller:
         self.state = store.load([m.vast_machine_id for m in cfg.machines])
         self._dirty = False
         self._last_on_demand_warn = {}
+        self._told_no_mode = set()
         self.pass_decisions = []      # (machine id, msg) made this pass
 
     # -- bookkeeping ---------------------------------------------------
@@ -128,9 +129,10 @@ class Controller:
         for m in targets:
             if self.mstate(m)["mode"] in MODES:
                 active.append(m)
-            else:
+            elif m.vast_machine_id not in self._told_no_mode:
+                self._told_no_mode.add(m.vast_machine_id)   # say it once
                 log.error("[%s] no mode set: run `mode vast|paralon|dual` "
-                          "first", m.vast_machine_id)
+                          "first; skipped", m.vast_machine_id)
         if not active:
             return False
         try:
