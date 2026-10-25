@@ -1,0 +1,25 @@
+{
+  "_comment": "Copy to /etc/vast-paralon-dual/config.json and edit. Keys starting with _ are ignored.",
+
+  "vast_machine_id": 12345,
+  "paralon_node_id": "your-paralon-node-id",
+
+  "_on_paralon_rental": "REQUIRED, no default. keep_vast_listed = Vast stays listed while Paralon is rented (a Vast booking reclaims the Paralon spot rental). unlist_vast = Vast is unlisted while Paralon is rented and relisted afterwards.",
+  "on_paralon_rental": "CHOOSE keep_vast_listed OR unlist_vast",
+
+  "_vast_listing": "Used for every relist. An unlisted Vast machine reports no live price, so your prices must live here. Keys map to `vastai list machine` flags.",
+  "vast_listing": {
+    "price_gpu": 0.40,
+    "price_min_bid": 0.30,
+    "price_disk": 0.10,
+    "duration": "14 days"
+  },
+
+  "state_file": "/var/lib/vast-paralon-dual/state.json",
+  "poll_interval_s": 60,
+  "paralon_min_get_interval_s": 60,
+  "paralon_max_calls_per_min": 4,
+  "reclaim_retry_s": 300,
+  "vastai_bin": "vastai",
+  "docker_events": false
+}

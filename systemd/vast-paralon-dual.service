@@ -1,0 +1,27 @@
+# Template. Do not copy it by hand: render it for your account with
+#   python3 vast_paralon_dual.py service | sudo tee /etc/systemd/system/vast-paralon-dual.service
+# which fills in the @...@ placeholders below. To edit by hand instead, set:
+#   @USER@      the account that ran `vastai set api-key` and `init`
+#   @PYTHON@    python3, e.g. /usr/bin/python3
+#   @SCRIPT@    full path to vast_paralon_dual.py
+#   @CONFIG@    the config `init` wrote (~/.config/vast-paralon-dual/config.json)
+#   @ENV_FILE@  the key file next to it (~/.config/vast-paralon-dual/env)
+# The state file defaults to ~/.local/state/vast-paralon-dual/state.json.
+# If you set "docker_events": true, the account must be in the docker group.
+[Unit]
+Description=Vast.ai + Paralon Cloud dual-listing watcher
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+EnvironmentFile=@ENV_FILE@
+ExecStart=@PYTHON@ @SCRIPT@ -c @CONFIG@ run
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
