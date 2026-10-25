@@ -202,8 +202,18 @@ class Controller:
                          logging.WARNING)
             return False
         if node is None:
+            if st["took_off"]["vast"] and not vm.listed:
+                # The node is gone (deleted, or re-created with a new id), so
+                # no Paralon rental can be holding the GPU: give Vast back
+                # rather than leaving the machine unlisted with nobody owing it.
+                self._decide(m, f"Paralon node {m.paralon_node_id} is not in "
+                             "GET /nodes; relisting the Vast machine this tool "
+                             "unlisted", logging.WARNING)
+                return self._side(m, "vast", want_off=False, is_up=vm.listed,
+                                  force_up=False, vm=vm)
             self._decide(m, f"hold: Paralon node {m.paralon_node_id} not "
-                         "found in GET /nodes", logging.WARNING)
+                         "found in GET /nodes (deleted or re-created? fix the "
+                         "config)", logging.WARNING)
             return False
 
         log.debug("[%s] vast listed=%s running=%s resident=%s | paralon "
@@ -217,20 +227,22 @@ class Controller:
         vast_renter = vm.running > 0
         policy = self.cfg.on_paralon_rental
 
+        paralon_off = vast_renter or mode == "vast"
+        vast_off = mode == "paralon" or (
+            mode == "dual" and node.rented and not vast_renter
+            and policy == "unlist_vast")
+
+        # Pause Paralon BEFORE reclaiming, so a reclaimed node is not open to
+        # a new rental in the gap between the two calls.
+        ok = self._side(m, "paralon", want_off=paralon_off,
+                        is_up=node.available, force_up=(mode == "paralon"),
+                        node=node)
         # Rule 1 (every mode): a Vast renter wins the GPU.
         if vast_renter and node.rented:
             self._reclaim(m, node)
         elif not node.rented and st["reclaim_sent_at"] is not None:
             st["reclaim_sent_at"] = None
             self._dirty = True
-
-        paralon_off = vast_renter or mode == "vast"
-        vast_off = mode == "paralon" or (
-            mode == "dual" and node.rented and not vast_renter
-            and policy == "unlist_vast")
-
-        ok = self._side(m, "paralon", want_off=paralon_off,
-                        is_up=node.available, force_up=(mode == "paralon"))
         ok = self._side(m, "vast", want_off=vast_off, is_up=vm.listed,
                         force_up=(mode == "vast"), vm=vm) and ok
         return ok
@@ -295,9 +307,17 @@ class Controller:
             return None
         return listing
 
-    def _side(self, m, side, *, want_off, is_up, force_up, vm=None):
+    def _side(self, m, side, *, want_off, is_up, force_up, vm=None, node=None):
         st = self.mstate(m)
         flags = st["took_off"]
+        if (side == "paralon" and not want_off and not is_up and node is not None
+                and node.raw.get("online") is False):
+            # Paralon cannot rent an offline node whatever `available` says,
+            # and PATCHing it every pass only spends the call budget.
+            self._decide(m, "hold: Paralon node is OFFLINE (its agent is not "
+                         "connected on the machine); not making it available",
+                         logging.WARNING)
+            return False
         if want_off:
             if is_up:
                 msg = f"take {side} off"
@@ -329,17 +349,19 @@ class Controller:
                 self._decide(m, f"put {side} back")
             if not self._write(m, side, up=True, listing=listing):
                 return False
-            if flags[side] or (side == "vast" and st["saved_listing"]):
-                flags[side] = False
-                if side == "vast":
-                    st["saved_listing"] = None
-                self._save()          # flag cleared only after success
+            # The flag and saved terms stay until the NEXT read shows the
+            # side back up: a write that returned cleanly is not proof (the
+            # vastai CLI exits 0 on a refused list). A force_up relist of a
+            # side the host had taken down is ours to confirm from here.
+            if not flags[side]:
+                flags[side] = True
+                self._save()
             return True
         if is_up and flags[side]:
-            flags[side] = False       # someone else already restored it
+            flags[side] = False       # confirmed back (by us, or by the host)
             if side == "vast":
                 st["saved_listing"] = None
-            self._decide(m, f"{side} is already back; clearing flag")
+            self._decide(m, f"{side} is back; flag cleared")
         return True
 
     def _write(self, m, side, *, up, listing=None):

@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import os
+import shutil
 import signal
 import sys
 import threading
@@ -22,7 +24,12 @@ MIN_EVENT_GAP_S = 15   # an event-triggered pass at most every 15 s
 
 
 def build(cfg, dry_run):
-    vast = VastCLI(cfg.vastai_bin)
+    binary = shutil.which(cfg.vastai_bin) or cfg.vastai_bin
+    if binary == cfg.vastai_bin and not os.path.isabs(binary):
+        log.warning("`%s` is not on this process's PATH (under systemd the PATH "
+                    "is minimal); set \"vastai_bin\" in the config to its full "
+                    "path, e.g. ~/.local/bin/vastai", cfg.vastai_bin)
+    vast = VastCLI(binary)
     paralon = ParalonClient(
         cfg.paralon_base_url, cfg.paralon_api_key,
         min_get_interval_s=cfg.paralon_min_get_interval_s,
@@ -37,8 +44,11 @@ def cmd_run(ctl, cfg):
     signal.signal(signal.SIGTERM, lambda *_: (stop.set(), wake.set()))
     moded = [m for m in cfg.machines if ctl.mstate(m)["mode"] in MODES]
     if not moded:
-        log.error("no mode set: run `mode vast|paralon|dual` once first")
-        return 2
+        # Keep running: every pass re-reads the state file, so a `mode ...`
+        # run later is picked up. Exiting would make systemd restart us
+        # every 30 s with the same error.
+        log.warning("no mode set yet for any machine: nothing will be done "
+                    "until you run `mode vast|paralon|dual`")
     if cfg.docker_events:
         start_watcher(wake)
     for m in cfg.machines:
@@ -147,7 +157,8 @@ def main(argv=None):
                         "~/.config/vast-paralon-dual/config.json)")
     p.add_argument("--dry-run", action="store_true",
                    help="log what would be done; write nothing")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="debug logging (each pass's readings)")
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="cmd", required=True)
     add_init_args(sub.add_parser(

@@ -50,8 +50,10 @@ class ParalonNode:
         if self.state == "rented":
             return True
         if isinstance(self.rental, dict):
-            # A rental record that says it is over does not count; any other
-            # (or unknown) status is treated as rented, the safe side.
+            if not self.rental:
+                return False            # an empty record is no rental
+            # A record that says it is over does not count; any other (or
+            # missing) status is treated as rented, the safe side.
             return str(self.rental.get("status", "")).lower() not in ENDED
         return bool(self.rental)
 
@@ -159,6 +161,12 @@ class ParalonClient:
                 payload = resp.read()
         except urllib.error.HTTPError as exc:
             code = exc.code
+            try:                       # Paralon's own reason, when it gives one
+                detail = exc.read()[:200].decode("utf-8", "replace").strip()
+            except Exception:
+                detail = ""
+            if detail:
+                log.warning("%s %s -> HTTP %s: %s", method, path, code, detail)
             if code in BACKOFF_STATUSES or code >= 500:
                 retry_after = None
                 try:

@@ -207,7 +207,8 @@ class VastCLITests(unittest.TestCase):
         self.assertEqual(m.listing_terms, {
             "price_gpu": 0.43, "price_min_bid": 0.38, "price_disk": 0.333,
             "price_inetu": 4.0 / 1024, "price_inetd": 3.0 / 1024,
-            "min_chunk": 1, "end_date": 1798761600.0})
+            "min_chunk": 1, "discount_rate": 0.0, "end_date": 1798761600.0,
+            "vol_size": 0})
 
     def test_relist_args_from_saved_terms(self):
         r = FakeRunner(fixture("fixture_vast_show_machines.json"))
@@ -217,7 +218,8 @@ class VastCLITests(unittest.TestCase):
             "list", "machine", "12345", "--price_gpu", "0.43",
             "--price_min_bid", "0.38", "--price_disk", "0.333",
             "--price_inetu", "0.00390625", "--price_inetd", "0.0029296875",
-            "--min_chunk", "1", "--end_date", "1798761600"])
+            "--discount_rate", "0", "--min_chunk", "1",
+            "--end_date", "1798761600", "--vol_size", "0"])
 
     def test_one_bad_record_only_fails_that_machine(self):
         r = FakeRunner({"machines": [machine(), {"id": 222}]})
@@ -231,12 +233,13 @@ class VastCLITests(unittest.TestCase):
             111, {"price_gpu": 0.5, "price_min_bid": 0.3, "duration": "14 days"})
         self.assertEqual(r.calls[0], [
             "vastai", "list", "machine", "111", "--price_gpu", "0.5",
-            "--price_min_bid", "0.3", "--duration", "14 days"])
+            "--price_min_bid", "0.3", "--duration", "14 days", "--raw"])
 
     def test_unlist(self):
         r = FakeRunner([])
         VastCLI(runner=r).unlist_machine(111)
-        self.assertEqual(r.calls[0], ["vastai", "unlist", "machine", "111"])
+        self.assertEqual(r.calls[0], ["vastai", "unlist", "machine", "111",
+                                      "--raw"])
 
     def test_errors(self):
         r = FakeRunner([machine()])
@@ -288,7 +291,7 @@ class EndToEnd(TempDirMixin, unittest.TestCase):
         ctl.set_mode("dual")
         ctl.poll()
         self.assertEqual(runner.calls[-1], ["vastai", "unlist", "machine",
-                                            "12345"])
+                                            "12345", "--raw"])
         saved = self.mstate(12345)["saved_listing"]
         self.assertEqual(saved["price_disk"], 0.333)
         # Paralon rental ends; Vast reports the machine unlisted (no terms).
@@ -304,7 +307,13 @@ class EndToEnd(TempDirMixin, unittest.TestCase):
                           ("--end_date", "1798761600")):
             i = runner.calls[-1].index(flag)
             self.assertEqual(runner.calls[-1][i + 1], val)
+        # Still owed until the next read shows the machine listed again.
+        self.assertIsNotNone(self.mstate(12345)["saved_listing"])
+        vast_data["machines"][0].update(listed=True, listed_gpu_cost=0.43)
+        clock.t += 61
+        ctl.poll()
         self.assertIsNone(self.mstate(12345)["saved_listing"])
+        self.assertFalse(self.mstate(12345)["took_off"]["vast"])
 
     def test_live_rule1_reclaims_and_pauses(self):
         ctl, http, runner = self.build(
@@ -312,7 +321,7 @@ class EndToEnd(TempDirMixin, unittest.TestCase):
             [machine(current_rentals_running=1)], dry_run=False)
         ctl.set_mode("dual")
         ctl.poll()
-        self.assertEqual([r[0] for r in http.requests], ["GET", "POST", "PATCH"])
+        self.assertEqual([r[0] for r in http.requests], ["GET", "PATCH", "POST"])
 
 
 class ConfigTests(TempDirMixin, unittest.TestCase):

@@ -92,7 +92,8 @@ def _check_listing(listing, where):
     if unknown:
         raise ConfigError(f"unknown {where} keys: {', '.join(unknown)}")
     for key in NUMERIC_KEYS:
-        if key in listing and not isinstance(listing[key], (int, float)):
+        if key in listing and (isinstance(listing[key], bool)
+                               or not isinstance(listing[key], (int, float))):
             raise ConfigError(f"\"{where}.{key}\" must be a number")
     if "end_date" in listing and "duration" in listing:
         raise ConfigError(f"\"{where}\": set end_date OR duration, not both "
@@ -167,6 +168,18 @@ def parse_config(raw, env=None):
         raise ConfigError(f"unknown config keys: {', '.join(unknown)}")
 
     kwargs = {k: raw[k] for k in known if k in raw}
+    for key in ("poll_interval_s", "paralon_min_get_interval_s",
+                "paralon_max_calls_per_min", "reclaim_retry_s"):
+        if key in kwargs and (isinstance(kwargs[key], bool)
+                              or not isinstance(kwargs[key], int)
+                              or kwargs[key] < 1):
+            raise ConfigError(f"\"{key}\" must be a whole number >= 1 "
+                              f"(got {kwargs[key]!r})")
+    if "docker_events" in kwargs and not isinstance(kwargs["docker_events"], bool):
+        raise ConfigError("\"docker_events\" must be true or false (no quotes)")
+    for key in ("state_file", "vastai_bin", "paralon_base_url"):
+        if key in kwargs and (not isinstance(kwargs[key], str) or not kwargs[key]):
+            raise ConfigError(f"\"{key}\" must be a non-empty string")
     kwargs["vast_listing"] = top_listing
     cfg = Config(machines=machines, **kwargs)
     cfg.state_file = os.path.expanduser(cfg.state_file)

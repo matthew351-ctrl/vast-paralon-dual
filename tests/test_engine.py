@@ -89,6 +89,9 @@ class Rule3RelistOnlyWhatWeTookOff(Base):
         v.running = 0
         c.poll()
         self.assertEqual(p.writes, [OFF, ON])
+        self.assertTrue(self.mstate()["took_off"]["paralon"])   # until confirmed
+        c.poll()                                                 # read shows it up
+        self.assertEqual(p.writes, [OFF, ON])
         self.assertFalse(self.mstate()["took_off"]["paralon"])
 
     def test_side_the_host_took_off_is_left_alone(self):
@@ -110,6 +113,7 @@ class Rule3RelistOnlyWhatWeTookOff(Base):
         v.fail_write = False
         c.poll()
         self.assertTrue(v.listed)
+        c.poll()                      # the next read confirms, then clears
         self.assertFalse(self.mstate()["took_off"]["vast"])
         self.assertIsNone(self.mstate()["saved_listing"])
 
@@ -315,6 +319,7 @@ class Modes(Base):
         c.poll()
         self.assertTrue(v.listed)
         self.assertTrue(p.available)
+        c.poll()                      # confirming read clears the flags
         self.assertEqual(self.mstate()["took_off"],
                          {"vast": False, "paralon": False})
         self.assertEqual(v.writes[-1][2]["price_gpu"], 0.45)  # its own price

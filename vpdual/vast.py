@@ -34,12 +34,13 @@ SAVED_FIELDS = {
     "listed_inet_up_cost": "price_inetu",
     "listed_inet_down_cost": "price_inetd",
     "listed_min_gpu_count": "min_chunk",   # --min_chunk resets to 1 otherwise
+    "credit_discount_max": "discount_rate",  # --discount_rate resets to 0.4
+    "listed_volume_cost": "vol_price",
+    "volume_total_size": "vol_size",       # --vol_size defaults to half the disk
     "end_date": "end_date",
     "duration": "duration",                # seconds when the offer is rolling
 }
 INT_KEYS = ("min_chunk", "vol_size")
-# Not saved: Vast's row has no field that holds --discount_rate (its default
-# is 0.4). A host who uses one sets it in the config vast_listing.
 
 
 def _num(value):
@@ -79,6 +80,12 @@ class VastMachine:
             if val is None or (key == "duration" and val <= 0):
                 continue
             terms[key] = int(val) if key in INT_KEYS else val
+        if "vol_price" not in terms:
+            # No volume offer on the machine: say so, or `list machine`
+            # creates one sized to half the disk by default.
+            terms.pop("vol_size", None)
+            if terms:
+                terms["vol_size"] = 0
         return terms
 
     @classmethod
@@ -164,22 +171,33 @@ class VastCLI:
         return args
 
     def list_machine(self, machine_id, listing):
-        out = self._call(self.list_args(machine_id, listing))
+        out = self._call(self.list_args(machine_id, listing) + ["--raw"])
         self._check_reply(out)
 
     def unlist_machine(self, machine_id):
-        out = self._call(["unlist", "machine", str(machine_id)])
+        out = self._call(["unlist", "machine", str(machine_id), "--raw"])
         self._check_reply(out)
 
     @staticmethod
     def _check_reply(out):
-        # The CLI prints a server message; a JSON reply may carry success=false.
-        try:
-            data = json.loads(out)
-        except ValueError:
-            data = None
-        if isinstance(data, dict) and data.get("success") is False:
+        """`vastai list/unlist machine` exits 0 and prints only the server's
+        message even when the server REFUSES (vastai 1.3.0 source), so the
+        exit code proves nothing. With --raw the CLI prints the JSON reply,
+        and that must say success. Older CLIs that print text fall back to a
+        text check; the engine also confirms the side on its next read."""
+        text = out.strip()
+        data = None
+        start = text.find("{")
+        if start >= 0:
+            try:
+                data = json.loads(text[start:])
+            except ValueError:
+                data = None
+        if isinstance(data, dict):
+            if data.get("success") is True:
+                return
             raise VastError(f"vastai refused: {data.get('msg') or data}")
-        low = out.lower()
-        if low.startswith("error") or "failed with error" in low:
-            raise VastError(f"vastai refused: {out.splitlines()[0]}")
+        low = text.lower()
+        if low.startswith("error") or "failed with error" in low \
+                or "not found" in low or "unauthorized" in low:
+            raise VastError(f"vastai refused: {text.splitlines()[0]}")

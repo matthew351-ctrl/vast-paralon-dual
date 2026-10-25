@@ -13,6 +13,7 @@ not unlist), and a relist restores the machine's own prices.
 """
 
 import json
+import logging
 import os
 import tempfile
 
@@ -83,6 +84,10 @@ class StateStore:
         st = _clean(old)
         if len(ids) == 1:
             return {"machines": {ids[0]: st}}
+        logging.getLogger("vpdual").warning(
+            "state file %s is from the single-machine version and the config "
+            "now has %d machines: its mode is not carried over; run `mode ...`",
+            self.path, len(ids))
         if owes_something(st):
             raise ValueError(
                 f"state file {self.path} is from the single-machine version "

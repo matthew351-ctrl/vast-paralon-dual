@@ -258,6 +258,10 @@ def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
     except (InitError, ConfigError) as exc:
         out(f"error: {exc}")
         return 2
+    except EOFError:
+        out("error: no terminal to ask questions on. For a scripted install "
+            "pass --policy and --pair VAST_ID=NODE_ID (see --help).")
+        return 2
 
     try:
         _write_private(cfg_path, json.dumps(raw, indent=2) + "\n", 0o644)

@@ -55,9 +55,12 @@ Run these as your normal user on the control plane or the GPU machine (see
 above):
 
 ```sh
-# 1. Install
+# 1. Install (Python 3.8+; pipx keeps the Vast CLI out of the system Python,
+#    which recent Ubuntu/Debian lock down)
 git clone https://github.com/matthew351-ctrl/vast-paralon-dual.git ~/vast-paralon-dual && cd ~/vast-paralon-dual
-pip install --user vastai && vastai set api-key YOUR_VAST_API_KEY
+sudo apt install -y pipx && pipx install vastai && pipx ensurepath
+export PATH="$HOME/.local/bin:$PATH"      # until you log in again
+vastai set api-key YOUR_VAST_API_KEY
 
 # 2. Set the Paralon key (create it in the Paralon dashboard with the
 #    "My nodes" permission)
@@ -125,7 +128,7 @@ vast_paralon_dual.py [-c CONFIG] service
   - `paralon`: Vast unlisted, Paralon available once no Vast renter is
     running (unlisting never evicts a renter).
 - `run`: the watcher (what the service runs). Machines with no mode are
-  skipped.
+  skipped until one is set.
 - `service`: prints the systemd unit filled in for your account, Python and
   paths (template: `systemd/vast-paralon-dual.service`).
 - `--dry-run`: logs what it would do; no API write, no state-file write.
@@ -157,15 +160,18 @@ Switching modes does not end a rental already running on either side.
 
 Just before it unlists a Vast machine, the tool saves that machine's current
 listing from the same read: GPU price, min bid, disk price, upload and
-download bandwidth prices, minimum GPU chunk, and the offer end. The relist
-passes all of them back (`vastai list machine` resets any term it is not
-given). A rolling offer (`--duration`, extended daily by Vast) is relisted as
-rolling; a fixed end date is relisted as that date, or, if it has passed by
-then, with the config's `duration`.
+download bandwidth prices, minimum GPU chunk, reserved discount rate, volume
+offer (or `--vol_size 0` when there is none, so Vast does not create one),
+and the offer end. The relist passes all of them back (`vastai list machine`
+resets any term it is not given). A rolling offer (`--duration`, extended
+daily by Vast) is relisted as rolling; a fixed end date is relisted as that
+date, or, if it has passed by then, with the config's `duration`.
 
-Vast's machine record does not report a listing's `--discount_rate`, so if
-you use one, set it in the config `vast_listing` or it relists at Vast's
-default (0.4).
+A relist or unlist is checked two ways: the CLI is run with `--raw` and its
+JSON reply must say `success`, because `vastai` exits 0 and prints only a
+message when the server refuses; and the "owed" flag is cleared only when
+the next read shows the side back. If the Paralon node disappears from your
+account while a Vast relist is owed, the relist still happens.
 
 Config prices are only a fallback, for terms nothing was saved for, for
 example a machine you unlisted by hand before installing and then switch to
@@ -202,8 +208,14 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | `docker_events` | `true` to also check immediately on any container start (needs Docker access; polling works without it) |
 
 The old single-machine format (`vast_machine_id` and `paralon_node_id` at the
-top level) still loads, and an old state file is carried over for that one
-machine.
+top level) still loads. An old (v0.1) state file is carried over only when
+the config still has exactly one machine; with more, its mode is dropped
+(logged) and you run `mode ...` again.
+
+Notes: `current_rentals_running` is Vast's count, so an interruptible (bid)
+renter counts as a Vast renter, as it should. Hand-run `status` or `mode`
+commands make their own Paralon calls outside the service's per-minute
+budget; `status` is one `GET /nodes`.
 
 The key comes from `PARALON_API_KEY`, or else from the `env` file next to
 the config. It is never logged.
@@ -216,6 +228,12 @@ The service runs as the user who installed it, so it uses that user's
 `systemd/vast-paralon-dual.service` and replace the `@...@` placeholders as
 its header explains. If `docker_events` is on, that user must be in the
 `docker` group.
+
+systemd starts the service with a minimal `PATH`, so `vastai_bin` must be a
+full path (`init` writes one; `run` warns if it cannot resolve the name). A
+service with no mode set keeps running and warns until you run `mode ...`;
+every pass re-reads the state file, so it picks the mode up without a
+restart.
 
 ## API use
 
