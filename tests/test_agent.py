@@ -34,7 +34,7 @@ class VastRenterStopsTheAgent(Base):
         d = FakeDocker().add(*INFER).add(*DOWNLOAD)
         self.ctl(FakeVast(running=1), FakeParalon(available=False), d).poll()
         self.assertEqual(d.writes, [("stop", ["agent1"]),
-                                    ("stop", ["inf1", "dl1"])])
+                                    ("kill", ["inf1", "dl1"])])
         self.assertTrue(self.mstate()["took_off"]["agent"])
         self.assertEqual(d.targets[0], "user@gpu1")
 
@@ -48,12 +48,12 @@ class VastRenterStopsTheAgent(Base):
     def test_a_benchmark_beside_the_renter_is_stopped(self):
         d = FakeDocker().add(*BENCH)
         self.ctl(FakeVast(running=1), FakeParalon(available=False), d).poll()
-        self.assertIn(("stop", ["bench1"]), d.writes)
+        self.assertIn(("kill", ["bench1"]), d.writes)
 
     def test_agent_already_stopped_leftovers_still_cleared(self):
         d = FakeDocker(agent_running=False).add(*INFER)
         self.ctl(FakeVast(running=1), FakeParalon(available=False), d).poll()
-        self.assertEqual(d.writes, [("stop", ["inf1"])])
+        self.assertEqual(d.writes, [("kill", ["inf1"])])
 
     def test_agent_restarted_by_docker_is_stopped_again(self):
         d = FakeDocker()
@@ -211,7 +211,10 @@ class DockerHostCommands(unittest.TestCase):
     def test_local_runs_docker_directly(self):
         calls, run = self.run_recorder()
         DockerHost("local", run=run).stop(["a", "b"])
-        self.assertEqual(calls, [["docker", "stop", "-t", "10", "a", "b"]])
+        self.assertEqual(calls, [["docker", "stop", "-t", "2", "a", "b"]])
+        calls.clear()
+        DockerHost("local", run=run).kill(["c"])
+        self.assertEqual(calls, [["docker", "kill", "c"]])
 
     def test_ssh_quotes_the_remote_command(self):
         calls, run = self.run_recorder()

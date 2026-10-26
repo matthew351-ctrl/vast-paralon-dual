@@ -189,8 +189,10 @@ read holds on its own.
    reclaimed: the tool warns.
    Then the machine's **Paralon agent is stopped**, and after it any
    container it started that is still running (inference, model download,
-   benchmark). The agent goes first, so it is gone before the containers it
-   watches stop. While a Paralon rental is being reclaimed the agent stays
+   benchmark) is killed. The agent goes first (2 s grace), so it is gone
+   before the containers it watches die; the leftovers are killed outright
+   because Paralon's inference worker ignores a polite stop and would hold
+   the renter's GPU memory for Docker's whole stop timeout. While a Paralon rental is being reclaimed the agent stays
    up, because it runs the reclaim; it is stopped once the rental has ended.
    A Paralon rental's container and Vast's containers are never touched. If
    Docker restarts and brings the agent back during the rental, the next pass
@@ -321,10 +323,10 @@ restart.
   minute, writes beyond the limit wait for a later pass.
 - Docker on each GPU machine (only with `paralon_agent`; directly, or one
   `ssh -o BatchMode=yes user@host docker ...` per command):
-  `docker ps -a --no-trunc --format ...` each pass while a Vast renter is on
-  (or an agent start is owed), `docker stop -t 10 <id>`
-  for the agent and then the containers it started, `docker start <id>` for
-  the agent. The agent is found by its image (`ghcr.io/paraloncloud/agent`),
+  each pass, one read of the machine (`docker ps -a --no-trunc --format ...`
+  and `nvidia-smi`); on a Vast arrival `docker stop -t 2 <id>` for the agent,
+  then `docker kill <id>` for the containers it started; `docker start <id>`
+  for the agent; and `docker events` (one long-lived stream per machine). The agent is found by its image (`ghcr.io/paraloncloud/agent`),
   because it renames its own container when it updates. Each pass also runs
   one short shell command for the Jupyter pin: `docker image inspect`, then
   `docker create` only if the pin is missing, and `docker rm` of older pins.

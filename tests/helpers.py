@@ -180,6 +180,13 @@ class FakeDocker:
         for cid in ids:
             self.get(cid).running = False
 
+    def kill(self, ids):
+        self.writes.append(("kill", list(ids)))
+        if self.fail_write:
+            raise AgentError("docker kill exited 1")
+        for cid in ids:
+            self.get(cid).running = False
+
     def start(self, cid):
         self.writes.append(("start", cid))
         if self.fail_write:

@@ -408,15 +408,19 @@ class Controller:
                 if not flags["agent"]:
                     flags["agent"] = True
                     self._save()      # the owed start is on disk first
-                ids = [[agent.id]] + ([[c.id for c in extra]] if extra else [])
+                steps = [("stop", [agent.id])] + ([("kill", [c.id for c in extra])]
+                                                  if extra else [])
             elif extra:
                 self._decide(m, f"Vast renter running: stop Paralon's "
                              f"containers ({names})")
-                ids = [[c.id for c in extra]]
+                steps = [("kill", [c.id for c in extra])]
             else:
                 return True
-            # Agent first, so it is gone before the containers it watches stop.
-            return all(self._docker_write(m, "stop", group) for group in ids)
+            # Agent first (2 s grace), so it is gone before the containers it
+            # watches die; then the leftovers are KILLED at once -- the
+            # inference worker ignores SIGTERM and holds ~20 GB of the
+            # renter's GPU memory for as long as a stop would wait.
+            return all(self._docker_write(m, verb, group) for verb, group in steps)
         if not flags["agent"]:
             return True               # someone else stopped it: leave it
         if agent.running:
@@ -437,7 +441,7 @@ class Controller:
             return True
         try:
             host = self.docker(m.paralon_agent)
-            host.stop(arg) if verb == "stop" else host.start(arg)
+            {"stop": host.stop, "kill": host.kill, "start": host.start}[verb](arg)
         except AgentError as exc:
             self._decide(m, f"Paralon agent {verb} failed, will retry: {exc}",
                          logging.WARNING)

@@ -10,7 +10,8 @@ Docker on the GPU machine is reached directly ("local", when this tool runs
 on that machine) or over ssh ("user@host": key login, a user in the docker
 group). Only these commands are run:
   docker ps -a --no-trunc --format ...
-  docker stop -t 10 <id> [<id> ...]
+  docker stop -t 2 <agent id>
+  docker kill <id> [<id> ...]        (the containers the agent started)
   docker start <id>
 
 Only Paralon's containers are ever stopped or started: the agent (found by its
@@ -41,7 +42,7 @@ PARALON_IMAGE_PREFIX = "ghcr.io/paraloncloud/"
 PARALON_NAME_PREFIX = "paralon-"
 TYPE_LABEL = "paralon.type"
 RENTAL = "rental"
-STOP_GRACE_S = 10
+STOP_GRACE_S = 2     # the agent exits on SIGTERM well inside this
 # [user@]host -- never starting with "-", so it cannot be read as an ssh option.
 SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(@[A-Za-z0-9_][A-Za-z0-9._:-]*)?$")
 JUPYTER_IMAGE = PARALON_IMAGE_PREFIX + "jupyter:latest"
@@ -228,6 +229,13 @@ class DockerHost:
     def stop(self, ids):
         if ids:
             self._docker("stop", "-t", str(STOP_GRACE_S), *ids)
+
+    def kill(self, ids):
+        """The agent's leftovers (inference, model download, benchmark): no
+        grace -- the inference worker ignores SIGTERM, so a stop would wait
+        Docker's whole timeout while it holds the GPU's memory."""
+        if ids:
+            self._docker("kill", *ids)
 
     def start(self, cid):
         self._docker("start", cid)
