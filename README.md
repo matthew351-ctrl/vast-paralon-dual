@@ -318,8 +318,10 @@ restart.
 - Paralon (`https://paraloncloud.com/api/v1`, `Authorization: Bearer prlc_...`):
   `GET /nodes`, `PATCH /nodes/{id}` with `{"available": true|false}`,
   `POST /nodes/{id}/reclaim` (spot only). One `GET /nodes` every 2 minutes
-  (shared by all machines), once a minute only while a machine is recovering
-  or one of its nodes is rented; at most 4 calls a minute; exponential
+  (shared by all machines); once a minute while one of its nodes is rented;
+  every 30 s for 4 minutes at a critical moment (a write that landed, a
+  reclaim, a Vast renter or a Paralon container starting on a machine) and
+  while a machine recovers after a Vast rental; at most 4 calls a minute; exponential
   back-off on every HTTP error and on network errors. No pause write is sent
   for a node that reads OFFLINE (it cannot be rented). With many machines changing in the same
   minute, writes beyond the limit wait for a later pass.

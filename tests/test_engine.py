@@ -258,6 +258,39 @@ class ApiBudget(Base):
         self.assertEqual(p.refreshes, 0)
 
 
+class Bursts(Base):
+    """v0.4.4: GET /nodes every 30 s for 4 min at a critical moment."""
+
+    def test_a_write_starts_a_burst_and_fresh_reads_every_30s(self):
+        now = [1000.0]
+        v, p = FakeVast(running=1), FakeParalon(available=True)
+        c = self.ctl(v, p, clock=lambda: now[0])
+        p.refreshes = 0
+        c.poll()                                   # pauses Paralon: a write
+        self.assertIn(OFF, p.writes)
+        self.assertTrue(c.bursting)
+        now[0] += 30
+        c.poll()
+        now[0] += 10
+        c.poll()                                   # inside 30 s: cached
+        self.assertEqual(p.refreshes, 1)
+        now[0] += 241
+        self.assertFalse(c.bursting)
+
+    def test_paralon_container_start_bursts_without_a_pause(self):
+        v, p = FakeVast(), FakeParalon(available=True)
+        c = self.ctl(v, p)
+        self.assertFalse(c.container_started(None, "jupyter-1", "ghcr.io/paraloncloud/jupyter:latest"))
+        self.assertTrue(c.bursting)
+        self.assertNotIn(OFF, p.writes)
+
+    def test_the_agent_restarting_is_no_burst(self):
+        v, p = FakeVast(), FakeParalon(available=True)
+        c = self.ctl(v, p)
+        c.container_started(None, "paralon-agent", "ghcr.io/paraloncloud/agent:latest")
+        self.assertFalse(c.bursting)
+
+
 class MultiMachine(Base):
     def setup3(self):
         v = FakeVast(running=1).add(222, listed=True).add(333, listed=True)

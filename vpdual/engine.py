@@ -56,7 +56,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from .agent import (AgentError, DockerHost, PARALON_IMAGE_PREFIX, PARALON_NAME_PREFIX,
+from .agent import (AGENT_IMAGE, AgentError, DockerHost, PARALON_IMAGE_PREFIX, PARALON_NAME_PREFIX,
                     PIN_PREFIX, agent_of, leftovers)
 from .config import REQUIRED_PRICES
 from .paralon import ParalonError
@@ -79,7 +79,13 @@ def _offline(node):
     return raw.get("online") is False or raw.get("state") == "offline"
 
 ON_DEMAND_WARN_EVERY_S = 3600
-FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while recovering or a node is rented -- once a minute, as our fleet does
+FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while a node is rented -- once a minute, as our fleet does
+# BURSTS at critical moments (v0.4.4): after a write that landed, a Vast renter
+# or a Paralon container starting on a machine, and while a machine recovers
+# after a Vast rental, GET /nodes is read fresh every BURST_EVERY_S. 30 s keeps
+# the burst read, a node write and a reclaim inside 4 calls a minute.
+BURST_EVERY_S = 30
+BURST_S = 240
 
 
 def describe_listing(listing):
@@ -109,8 +115,19 @@ class Controller:
         self.pass_decisions = []      # (machine id, msg) made this pass
         self.recovering = set()       # machine ids waiting on GPU / agent / node
         self._last_forced_nodes = 0.0
+        self.burst_until = 0.0
 
     # -- bookkeeping ---------------------------------------------------
+    @property
+    def bursting(self):
+        return self.clock() < self.burst_until
+
+    def burst(self, why):
+        """Read GET /nodes every BURST_EVERY_S for the next BURST_S."""
+        if not self.bursting:
+            log.info("burst reads for %ds: %s", BURST_S, why)
+        self.burst_until = max(self.burst_until, self.clock() + BURST_S)
+
     def mstate(self, machine):
         return self.state["machines"][str(machine.vast_machine_id)]
 
@@ -191,10 +208,13 @@ class Controller:
         # Once a minute while it matters (a machine recovering, or one of our
         # nodes rented); otherwise every paralon_min_get_interval_s (120 s) --
         # a once-a-minute read all day is ~1440 calls on its own.
-        busy = self.recovering or any(
-            (self.paralon.cached_node(m.paralon_node_id) or _NOT_RENTED).rented
-            for m in self.cfg.machines)
-        if busy and self.clock() - self._last_forced_nodes >= FORCED_NODES_EVERY_S:
+        every = None
+        if self.recovering or self.bursting:
+            every = BURST_EVERY_S                 # a critical moment
+        elif any((self.paralon.cached_node(m.paralon_node_id) or _NOT_RENTED).rented
+                 for m in self.cfg.machines):
+            every = FORCED_NODES_EVERY_S
+        if every and self.clock() - self._last_forced_nodes >= every:
             fresh, self._last_forced_nodes = True, self.clock()
         nodes = {n.id: n for n in self.paralon.list_nodes(refresh=fresh)}
         return vms, nodes
@@ -355,10 +375,15 @@ class Controller:
         node on that machine NOW; the caller wakes the full pass, which
         stops the agent and checks Vast. Returns True if it acted."""
         img, nm = (image or "").lower(), (name or "").lstrip("/")
-        if (img.startswith(PARALON_IMAGE_PREFIX) or nm.lower().startswith(PARALON_NAME_PREFIX)
-                or nm.startswith(PIN_PREFIX)
-                or any(img.startswith(i.lower()) for i in self.cfg.idle_job_images)):
+        if nm.startswith(PIN_PREFIX) or any(img.startswith(i.lower())
+                                            for i in self.cfg.idle_job_images):
             return False
+        if img.startswith(PARALON_IMAGE_PREFIX) or nm.lower().startswith(PARALON_NAME_PREFIX):
+            if AGENT_IMAGE not in img:
+                # a Paralon rental/worker starting: confirm it on the API soon
+                self.burst(f"Paralon container {nm} started on {target or 'this machine'}")
+            return False
+        self.burst(f"container {nm} started on {target or 'this machine'}")
         acted = False
         with self.locked():
             self.reload()
@@ -506,6 +531,7 @@ class Controller:
             return
         st["reclaim_sent_at"] = self.clock()
         self._dirty = True
+        self.burst("reclaim sent -- confirm it")
 
     def relist_listing(self, m):
         """Listing terms for a relist: config fallbacks overlaid with the
@@ -607,4 +633,5 @@ class Controller:
             self._decide(m, f"{side} write failed, will retry: {exc}",
                          logging.WARNING)
             return False
+        self.burst(f"{side} {'listed' if up else 'taken off'} -- confirm it")
         return True

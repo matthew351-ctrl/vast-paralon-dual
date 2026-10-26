@@ -71,7 +71,8 @@ def cmd_run(ctl, cfg):
             # A machine recovering after a Vast rental is checked every
             # fast_poll_s until its GPU is free, its agent up and its node
             # back on Paralon.
-            interval = cfg.fast_poll_s if ctl.recovering else cfg.poll_interval_s
+            interval = (cfg.fast_poll_s if ctl.recovering or ctl.bursting
+                        else cfg.poll_interval_s)
             woke = wake.wait(interval)
             wake.clear()
             if woke and not stop.is_set():
