@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 
-from vpdual.agent import AgentError, Container
+from vpdual.agent import AgentError, Container, MachineState
 from vpdual.config import Config, Machine
 from vpdual.paralon import ParalonError, ParalonNode
 from vpdual.state import StateStore
@@ -92,8 +92,9 @@ class FakeParalon:
                         lambda s, v: s.nodes["node-1"].__setitem__(name, v))
     available, rented, spot = _p("available"), _p("rented"), _p("spot")
 
-    def list_nodes(self):
+    def list_nodes(self, refresh=False):
         self.reads += 1
+        self.refreshes = getattr(self, "refreshes", 0) + bool(refresh)
         if self.fail_read:
             raise ParalonError("HTTP 503")
         out = []
@@ -103,8 +104,15 @@ class FakeParalon:
                 ("available" if n["available"] else "paused"),
                 available=n["available"], spot=n["spot"], price=1.0,
                 rental={"status": "running"} if n["rented"] else None,
-                raw={"name": nid, "gpus": [{"model": "RTX 4090"}]}))
+                raw={"name": nid, "gpus": [{"model": "RTX 4090"}],
+                     "online": n.get("online", True)}))
         return out
+
+    def cached_node(self, node_id):
+        for n in self.list_nodes():
+            if n.id == node_id:
+                return n
+        return None
 
     def set_available(self, node_id, available):
         self.writes.append(("available", node_id, available))
@@ -128,6 +136,8 @@ class FakeDocker:
         self.pins = 0
         self.pin_lines = ["kept 526048b557bf"]
         self.fail_pin = False
+        self.gpu_procs, self.gpu_mem_mib = 0, 0     # free unless a test says not
+        self.machine_reads = 0
         if agent:
             self.add("agent1", "ghcr.io/paraloncloud/agent:latest",
                      "paralon-agent", agent_running)
@@ -149,6 +159,13 @@ class FakeDocker:
         if self.fail_pin:
             raise AgentError("ssh: connect timed out")
         return list(self.pin_lines)
+
+    def machine_state(self):
+        self.machine_reads += 1
+        if self.fail_read:
+            raise AgentError("ssh: connect timed out")
+        return MachineState([Container(**vars(c)) for c in self.containers_],
+                            self.gpu_procs, self.gpu_mem_mib)
 
     def containers(self):
         self.reads += 1

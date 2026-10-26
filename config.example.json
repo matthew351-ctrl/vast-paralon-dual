@@ -1,8 +1,8 @@
 {
   "_comment": "`init` writes this file for you (~/.config/vast-paralon-dual/config.json). Keys starting with _ are ignored.",
 
-  "_on_paralon_rental": "REQUIRED, no default. keep_vast_listed = Vast stays listed while Paralon is rented (a Vast booking reclaims the Paralon spot rental). unlist_vast = Vast is unlisted while Paralon is rented and relisted afterwards.",
-  "on_paralon_rental": "CHOOSE keep_vast_listed OR unlist_vast",
+  "_on_paralon_rental": "unlist_vast (default) = Vast is unlisted while Paralon is rented and relisted afterwards. keep_vast_listed = Vast stays listed (a Vast booking reclaims the Paralon spot rental).",
+  "on_paralon_rental": "unlist_vast",
 
   "_paralon_agent": "STRONGLY RECOMMENDED, per machine. How to reach Docker on that GPU machine, so the Paralon agent is stopped while a Vast renter has the GPU and started again after: \"local\" when this tool runs on that machine, or user@host for ssh (key login, a user in the docker group). Leave it out and the agent keeps starting inference and benchmarks beside Vast renters.",
   "machines": [
@@ -21,5 +21,8 @@
   },
 
   "poll_interval_s": 60,
-  "docker_events": false
+  "_docker_events": "follow docker events on each machine with paralon_agent and pause Paralon the moment a non-Paralon container starts",
+  "docker_events": true,
+  "_idle_job_images": "image prefixes of your own idle job (e.g. a miner): never counted as a renter",
+  "idle_job_images": []
 }

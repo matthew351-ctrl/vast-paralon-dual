@@ -15,7 +15,17 @@ Rules (all modes):
      a paused node's agent keeps starting them, and they take the Vast
      renter's GPU. While a Paralon rental is being reclaimed the agent stays
      up (it runs the reclaim). When no Vast renter is left, the agent is
-     started again -- only if this tool stopped it.
+     started again -- only if this tool stopped it, and only once the
+     machine shows the GPU free (no compute process, memory near 0).
+     "A Vast renter is running" = Vast's running count OR a running Vast
+     container (C.<id>) on the machine itself: the count is a hint, the
+     machine decides. Paralon is made available again only when the machine
+     shows no Vast container, the agent running and the node online. While a
+     machine recovers after a Vast rental, passes run every fast_poll_s.
+     An ON-DEMAND node stays paused while the Vast machine has a stopped
+     instance that can resume (it could not be reclaimed if it did).
+     With docker_events, a non-Paralon container starting on the machine
+     pauses its Paralon node at once; the full pass follows.
   Every pass, for a machine with `paralon_agent` set: keep Paralon's Jupyter
   image pinned (Paralon rents a node only while it is present, and Vast's
   daemon deletes unused images within minutes). Never pulls.
@@ -46,7 +56,8 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from .agent import AgentError, DockerHost, agent_of, leftovers
+from .agent import (AgentError, DockerHost, PARALON_IMAGE_PREFIX, PARALON_NAME_PREFIX,
+                    PIN_PREFIX, agent_of, leftovers)
 from .config import REQUIRED_PRICES
 from .paralon import ParalonError
 from .state import MAX_DECISIONS, MODES
@@ -55,6 +66,7 @@ from .vast import VastError
 log = logging.getLogger("vpdual")
 
 ON_DEMAND_WARN_EVERY_S = 3600
+FORCED_NODES_EVERY_S = 15     # fresh GET /nodes while recovering (4 calls/min budget)
 
 
 def describe_listing(listing):
@@ -82,6 +94,8 @@ class Controller:
         self._last_on_demand_warn = {}
         self._told_no_mode = set()
         self.pass_decisions = []      # (machine id, msg) made this pass
+        self.recovering = set()       # machine ids waiting on GPU / agent / node
+        self._last_forced_nodes = 0.0
 
     # -- bookkeeping ---------------------------------------------------
     def mstate(self, machine):
@@ -160,7 +174,10 @@ class Controller:
         """Read both sides once. Returns (vast machines, paralon nodes) or
         raises VastError / ParalonError."""
         vms = self.vast.read_machines()
-        nodes = {n.id: n for n in self.paralon.list_nodes()}
+        fresh = False
+        if self.recovering and self.clock() - self._last_forced_nodes >= FORCED_NODES_EVERY_S:
+            fresh, self._last_forced_nodes = True, self.clock()
+        nodes = {n.id: n for n in self.paralon.list_nodes(refresh=fresh)}
         return vms, nodes
 
     def poll(self, machine_id=None):
@@ -235,10 +252,22 @@ class Controller:
         if mode == "dual" and not node.spot:
             self._warn_on_demand(m)
 
-        vast_renter = vm.running > 0
+        idle = self.cfg.idle_job_images
+        machine = self._read_machine(m) if m.paralon_agent else None
+        on_machine = machine.vast_running(idle) if machine else []
+        # Vast's count is a hint: a renter's container may still be pulling
+        # its image (count 1, no container) or already running before Vast's
+        # count moves (container, count 0). Either one means a renter.
+        vast_renter = vm.running > 0 or bool(on_machine)
+        # A stopped Vast instance can resume at any moment; on an ON-DEMAND
+        # node that Paralon rental could not be reclaimed, so keep it paused.
+        parked = not node.spot and vm.resident > vm.running
+        if parked and node.available:
+            self._decide(m, "Vast has a stopped instance that can resume and the "
+                         "node is ON-DEMAND (no reclaim possible): pause Paralon")
         policy = self.cfg.on_paralon_rental
 
-        paralon_off = vast_renter or mode == "vast"
+        paralon_off = vast_renter or mode == "vast" or parked
         vast_off = mode == "paralon" or (
             mode == "dual" and node.rented and not vast_renter
             and policy == "unlist_vast")
@@ -247,7 +276,7 @@ class Controller:
         # a new rental in the gap between the two calls.
         ok = self._side(m, "paralon", want_off=paralon_off,
                         is_up=node.available, force_up=(mode == "paralon"),
-                        node=node)
+                        node=node, block=self._paralon_block(m, machine))
         # Rule 1 (every mode): a Vast renter wins the GPU.
         if vast_renter and node.rented:
             self._reclaim(m, node)
@@ -257,9 +286,78 @@ class Controller:
         ok = self._side(m, "vast", want_off=vast_off, is_up=vm.listed,
                         force_up=(mode == "vast"), vm=vm) and ok
         if m.paralon_agent:
-            ok = self._agent(m, vast_renter, node) and ok
+            ok = self._agent(m, vast_renter, node, machine) and ok
             self._pin_jupyter(m)
+        self._track_recovery(m, vast_renter, node)
         return ok
+
+    # -- the machine ---------------------------------------------------
+    def _read_machine(self, m):
+        try:
+            return self.docker(m.paralon_agent).machine_state()
+        except AgentError as exc:
+            self._decide(m, f"cannot read the machine ({exc}); nothing is made "
+                         "available until it reads", logging.WARNING)
+            return None
+
+    def _paralon_block(self, m, machine):
+        """Why Paralon must not be made available yet (None: it may). Only for
+        a machine this tool can read; others keep the API-only rules."""
+        if not m.paralon_agent:
+            return None
+        if machine is None:
+            return "the machine is unreadable"
+        on = machine.vast_running(self.cfg.idle_job_images)
+        if on:
+            return f"Vast container(s) running on the machine: {', '.join(on)}"
+        agent = agent_of(machine.containers)
+        if agent is None or not agent.running:
+            return "the Paralon agent is not running yet"
+        return None
+
+    def _track_recovery(self, m, vast_renter, node):
+        """A machine is recovering from a Vast rental while this tool owes it
+        the agent's start or Paralon's relist: passes then run every
+        fast_poll_s so the node comes back within seconds, not a minute."""
+        flags = self.mstate(m)["took_off"]
+        owed = flags["agent"] or (flags["paralon"] and not node.available)
+        if m.paralon_agent and not vast_renter and owed:
+            self.recovering.add(m.vast_machine_id)
+        else:
+            self.recovering.discard(m.vast_machine_id)
+
+    def container_started(self, target, name, image):
+        """docker events on `target`: a container started. A non-Paralon one
+        (not ours, not the host's idle job) pauses every available Paralon
+        node on that machine NOW; the caller wakes the full pass, which
+        stops the agent and checks Vast. Returns True if it acted."""
+        img, nm = (image or "").lower(), (name or "").lstrip("/")
+        if (img.startswith(PARALON_IMAGE_PREFIX) or nm.lower().startswith(PARALON_NAME_PREFIX)
+                or nm.startswith(PIN_PREFIX)
+                or any(img.startswith(i.lower()) for i in self.cfg.idle_job_images)):
+            return False
+        acted = False
+        with self.locked():
+            self.reload()
+            for m in self.cfg.machines:
+                if m.paralon_agent != target or self.mstate(m)["mode"] not in MODES:
+                    continue
+                node = self.paralon.cached_node(m.paralon_node_id)
+                if node is None or not node.available or node.rented:
+                    continue          # unknown, already paused, or rented: the pass decides
+                self._decide(m, f"container {nm} started on the machine: pause Paralon now")
+                self.mstate(m)["took_off"]["paralon"] = True
+                self._save()          # the owed relist is on disk first
+                acted = True
+                if not self.dry_run:
+                    try:
+                        self.paralon.set_available(m.paralon_node_id, False)
+                    except ParalonError as exc:
+                        self._decide(m, f"paralon write failed, the pass retries: {exc}",
+                                     logging.WARNING)
+            if self._dirty:
+                self._save()
+        return acted
 
     def _pin_jupyter(self, m):
         """Keep Paralon's Jupyter image from Vast's image cleanup. A failure
@@ -276,18 +374,21 @@ class Controller:
         if changed:
             self._decide(m, "Paralon's Jupyter image: " + "; ".join(changed))
 
-    def _agent(self, m, vast_renter, node):
+    def _agent(self, m, vast_renter, node, machine=None):
         """Rule 1, agent half: the Paralon agent is off while Vast rents."""
         st = self.mstate(m)
         flags = st["took_off"]
         if not vast_renter and not flags["agent"]:
             return True               # nothing to stop, no start owed
-        try:
-            containers = self.docker(m.paralon_agent).containers()
-        except AgentError as exc:
-            self._decide(m, f"hold: cannot read Docker for the Paralon agent "
-                         f"({exc})", logging.WARNING)
-            return False
+        if machine is not None:
+            containers = machine.containers
+        else:
+            try:
+                containers = self.docker(m.paralon_agent).containers()
+            except AgentError as exc:
+                self._decide(m, f"hold: cannot read Docker for the Paralon agent "
+                             f"({exc})", logging.WARNING)
+                return False
         agent = agent_of(containers)
         if agent is None:
             self._decide(m, f"no Paralon agent container on {m.paralon_agent}; "
@@ -322,7 +423,13 @@ class Controller:
             flags["agent"] = False    # confirmed back
             self._decide(m, "Paralon agent is running again; flag cleared")
             return True
-        self._decide(m, "no Vast renter: start the Paralon agent")
+        free = machine.gpu_free(self.cfg.gpu_free_mib, self.cfg.idle_job_images) \
+            if machine is not None else None
+        if free is not True:
+            self._decide(m, "Vast renter gone; waiting for the GPU to be free "
+                         f"before starting the Paralon agent ({machine.gpu_text() if machine else 'machine unread'})")
+            return True
+        self._decide(m, "no Vast renter and the GPU is free: start the Paralon agent")
         return self._docker_write(m, "start", agent.id)
 
     def _docker_write(self, m, verb, arg):
@@ -397,9 +504,14 @@ class Controller:
             return None
         return listing
 
-    def _side(self, m, side, *, want_off, is_up, force_up, vm=None, node=None):
+    def _side(self, m, side, *, want_off, is_up, force_up, vm=None, node=None,
+              block=None):
         st = self.mstate(m)
         flags = st["took_off"]
+        if (side == "paralon" and not want_off and not is_up and block
+                and (flags[side] or force_up)):
+            self._decide(m, f"hold: not making Paralon available yet -- {block}")
+            return True
         if (side == "paralon" and not want_off and not is_up and node is not None
                 and node.raw.get("online") is False):
             # Paralon cannot rent an offline node whatever `available` says,

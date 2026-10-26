@@ -336,11 +336,14 @@ class ConfigTests(TempDirMixin, unittest.TestCase):
                 "on_paralon_rental": "unlist_vast",
                 "vast_listing": {"price_gpu": 0.5, "price_min_bid": 0.3}}
 
-    def test_refuses_without_policy(self):
+    def test_policy_defaults_to_unlist_vast(self):
+        # the founder 2026-10-26: "make unlist_vast the default" -- Vast cannot
+        # start a renter on a GPU Paralon has rented
         data = self.good()
         del data["on_paralon_rental"]
-        with self.assertRaisesRegex(ConfigError, "on_paralon_rental"):
-            load_config(self.write(data), env={"PARALON_API_KEY": KEY})
+        cfg = load_config(self.write(data), env={"PARALON_API_KEY": KEY})
+        self.assertEqual(cfg.on_paralon_rental, "unlist_vast")
+        self.assertTrue(cfg.docker_events)
 
     def test_refuses_bad_policy(self):
         data = self.good()
@@ -395,13 +398,10 @@ class ConfigTests(TempDirMixin, unittest.TestCase):
         self.assertEqual(cfg.on_paralon_rental, "unlist_vast")
         example = os.path.join(os.path.dirname(__file__), "..",
                                "config.example.json")
-        with self.assertRaisesRegex(ConfigError, "on_paralon_rental"):
-            load_config(example, env={"PARALON_API_KEY": KEY})
-        with open(example) as fh:
-            data = json.load(fh)
-        data["on_paralon_rental"] = "keep_vast_listed"
-        cfg = load_config(self.write(data), env={"PARALON_API_KEY": KEY})
+        cfg = load_config(example, env={"PARALON_API_KEY": KEY})
         self.assertEqual(len(cfg.machines), 2)
+        self.assertEqual(cfg.on_paralon_rental, "unlist_vast")
+        self.assertTrue(cfg.docker_events)
 
 
 if __name__ == "__main__":

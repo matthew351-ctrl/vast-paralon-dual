@@ -17,6 +17,10 @@ Only Paralon's containers are ever stopped or started: the agent (found by its
 image, because it renames its own container when it updates) and the
 containers it started. Never a Vast container, and never a Paralon rental.
 
+It also reads the machine itself (`machine_state`): which containers run,
+and whether the GPU is free (nvidia-smi: compute processes and memory in use).
+Decisions come from that, with Vast's rental count only as a hint.
+
 It also keeps Paralon's Jupyter image on the machine (`pin_jupyter`). Paralon
 rents a node only while that image is present, and Vast's daemon deletes
 images no container uses within minutes once images pass 10% of the disk. A
@@ -57,6 +61,19 @@ PIN_SCRIPT = (
     "[ \"$o\" = \"$n\" ] || { docker rm \"$o\" >/dev/null && echo \"removed $o\"; }; done"
 )
 PS_FORMAT = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.State}}\t{{.Label \"%s\"}}" % TYPE_LABEL
+# Vast names every rental's container C.<contract id> (Docker and VM rentals).
+VAST_NAME_RE = re.compile(r"^C\.\d+$")
+GPU_MARK = "---gpu---"
+# One shell: containers, then the GPU. nvidia-smi missing or failing reads
+# "gpu unreadable", never "free".
+MACHINE_SCRIPT = (
+    f"docker ps -a --no-trunc --format '{PS_FORMAT}' && echo {GPU_MARK} && "
+    "if p=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null) && "
+    "m=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null); "
+    "then echo \"procs $(printf '%s\\n' \"$p\" | grep -c .)\"; "
+    "echo \"mem $(printf '%s\\n' \"$m\" | awk '{s+=$1} END{print s+0}')\"; "
+    "else echo 'gpu unreadable'; fi"
+)
 
 
 class AgentError(Exception):
@@ -83,6 +100,55 @@ class Container:
     def is_paralon(self):
         return (self.image.lower().startswith(PARALON_IMAGE_PREFIX)
                 or self.name.lower().startswith(PARALON_NAME_PREFIX))
+
+
+@dataclass
+class MachineState:
+    """What runs on the GPU machine right now, read from the machine."""
+    containers: list
+    gpu_procs: object = None       # int, or None when nvidia-smi was unreadable
+    gpu_mem_mib: object = None
+
+    def _idle(self, c, idle_images):
+        return any(c.image.lower().startswith(i.lower()) for i in idle_images)
+
+    def vast_running(self, idle_images=()):
+        """Names of running Vast rental containers (C.<id>), not counting the
+        host's own idle job (`idle_job_images`)."""
+        return [c.name for c in self.containers if c.running
+                and VAST_NAME_RE.match(c.name) and not self._idle(c, idle_images)]
+
+    def idle_job_running(self, idle_images=()):
+        return any(c.running and self._idle(c, idle_images) for c in self.containers)
+
+    def gpu_free(self, limit_mib, idle_images=()):
+        """True: no compute process and memory near 0 (or only the host's idle
+        job on it). False: busy. None: nvidia-smi unreadable."""
+        if self.idle_job_running(idle_images):
+            return True
+        if self.gpu_procs is None or self.gpu_mem_mib is None:
+            return None
+        return self.gpu_procs == 0 and self.gpu_mem_mib <= limit_mib
+
+    def gpu_text(self):
+        if self.gpu_procs is None:
+            return "GPU unreadable"
+        return f"{self.gpu_procs} compute process(es), {self.gpu_mem_mib} MiB in use"
+
+
+def parse_machine(text):
+    ps, _sep, gpu = text.partition(GPU_MARK)
+    procs = mem = None
+    for line in gpu.splitlines():
+        k, _, v = line.strip().partition(" ")
+        if k in ("procs", "mem") and v.strip().isdigit():
+            if k == "procs":
+                procs = int(v)
+            else:
+                mem = int(v)
+    if procs is None or mem is None:
+        procs = mem = None
+    return MachineState(parse_ps(ps), procs, mem)
 
 
 def parse_ps(text):
@@ -154,6 +220,10 @@ class DockerHost:
 
     def containers(self):
         return parse_ps(self._docker("ps", "-a", "--no-trunc", "--format", PS_FORMAT))
+
+    def machine_state(self):
+        """Containers and GPU in one call (one ssh for a remote machine)."""
+        return parse_machine(self._exec(self._remote(MACHINE_SCRIPT), "machine read"))
 
     def stop(self, ids):
         if ids:

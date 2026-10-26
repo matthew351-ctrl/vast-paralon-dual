@@ -89,7 +89,7 @@ class OfflineNodeIsNotMadeAvailable(TempDirMixin, unittest.TestCase):
         v, p = FakeVast(), FakeParalon(available=False)
         orig = p.list_nodes
 
-        def offline():
+        def offline(refresh=False):
             nodes = orig()
             for n in nodes:
                 n.raw["online"] = False

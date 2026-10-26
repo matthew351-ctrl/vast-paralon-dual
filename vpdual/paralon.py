@@ -195,9 +195,13 @@ class ParalonClient:
             raise ParalonError(f"{method} {path} returned non-JSON")
 
     # -- API -----------------------------------------------------------
-    def list_nodes(self):
+    def list_nodes(self, refresh=False):
+        """GET /nodes, at most one per min_get_interval_s unless `refresh`
+        (a machine recovering after a Vast rental); every call still counts
+        toward max_calls_per_min."""
         now = self._clock()
-        if self._nodes_cache and now - self._nodes_cache[0] < self.min_get_interval_s:
+        if (not refresh and self._nodes_cache
+                and now - self._nodes_cache[0] < self.min_get_interval_s):
             return self._nodes_cache[1]
         data = self._request("GET", "/nodes")
         if isinstance(data, dict):
@@ -207,6 +211,13 @@ class ParalonClient:
         nodes = [ParalonNode.from_api(item) for item in data]
         self._nodes_cache = (self._clock(), nodes)
         return nodes
+
+    def cached_node(self, node_id):
+        """The node from the last GET /nodes, or None. No API call."""
+        for node in (self._nodes_cache or (0, []))[1]:
+            if node.id == str(node_id):
+                return node
+        return None
 
     def get_node(self, node_id):
         for node in self.list_nodes():

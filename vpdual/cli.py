@@ -21,7 +21,7 @@ from .vast import VastCLI, VastError
 
 log = logging.getLogger("vpdual")
 
-MIN_EVENT_GAP_S = 15   # an event-triggered pass at most every 15 s
+MIN_EVENT_GAP_S = 2    # an event-triggered pass at most every 2 s
 
 
 def build(cfg, dry_run):
@@ -51,7 +51,12 @@ def cmd_run(ctl, cfg):
         log.warning("no mode set yet for any machine: nothing will be done "
                     "until you run `mode vast|paralon|dual`")
     if cfg.docker_events:
-        start_watcher(wake)
+        targets = sorted({m.paralon_agent for m in cfg.machines if m.paralon_agent})
+        for t in targets:
+            start_watcher(wake, target=t,
+                          on_start=lambda name, image, t=t: ctl.container_started(t, name, image))
+        if not targets:
+            start_watcher(wake)      # no machine reachable: wake-only, local
     for m in cfg.machines:
         log.info("watching Vast machine %s + Paralon node %s (mode %s)",
                  m.vast_machine_id, m.paralon_node_id,
@@ -63,7 +68,11 @@ def cmd_run(ctl, cfg):
         while not stop.is_set():
             last = time.monotonic()
             ctl.poll()
-            woke = wake.wait(cfg.poll_interval_s)
+            # A machine recovering after a Vast rental is checked every
+            # fast_poll_s until its GPU is free, its agent up and its node
+            # back on Paralon.
+            interval = cfg.fast_poll_s if ctl.recovering else cfg.poll_interval_s
+            woke = wake.wait(interval)
             wake.clear()
             if woke and not stop.is_set():
                 gap = MIN_EVENT_GAP_S - (time.monotonic() - last)
@@ -110,6 +119,14 @@ def cmd_status(ctl, cfg, machine_id, out=print):
             except (AgentError, ValueError) as exc:
                 seen = f"unreadable ({exc})"
             out(f"  Paralon agent via {m.paralon_agent}: {seen}")
+            try:
+                ms = ctl.docker(m.paralon_agent).machine_state()
+                vast_on = ms.vast_running(cfg.idle_job_images)
+                out("  machine: Vast containers running: "
+                    + (", ".join(vast_on) if vast_on else "none")
+                    + f"; {ms.gpu_text()}")
+            except (AgentError, ValueError) as exc:
+                out(f"  machine: unreadable ({exc})")
         else:
             out("  Paralon agent: not managed (no paralon_agent in the config)")
         relist = ctl.relist_listing(m)

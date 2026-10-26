@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from .agent import valid_target
 
 POLICIES = ("keep_vast_listed", "unlist_vast")
+DEFAULT_POLICY = "unlist_vast"   # Vast cannot start a renter on a Paralon-rented GPU
 POLICY_HELP = {
     "keep_vast_listed": "Vast stays listed while Paralon is rented; a Vast "
                         "booking reclaims the Paralon spot rental.",
@@ -67,7 +68,7 @@ class Machine:
 @dataclass
 class Config:
     machines: list
-    on_paralon_rental: str
+    on_paralon_rental: str = DEFAULT_POLICY
     vast_listing: dict = field(default_factory=dict)
     state_file: str = DEFAULT_STATE
     poll_interval_s: int = 60
@@ -76,7 +77,10 @@ class Config:
     paralon_max_calls_per_min: int = 4
     reclaim_retry_s: int = 300
     vastai_bin: str = "vastai"
-    docker_events: bool = False
+    docker_events: bool = True     # act on container starts at once
+    gpu_free_mib: int = 500         # "GPU free" = no compute process and <= this
+    fast_poll_s: int = 5            # pass interval while a machine is recovering
+    idle_job_images: list = field(default_factory=list)   # the host's own idle job
     paralon_api_key: str = field(default="", repr=False)  # never printed
 
     def machine(self, vast_machine_id):
@@ -129,13 +133,12 @@ def parse_config(raw, env=None):
     if not isinstance(raw, dict):
         raise ConfigError("config must be a JSON object")
 
-    policy = raw.get("on_paralon_rental")
+    policy = raw.get("on_paralon_rental", DEFAULT_POLICY)
     if policy not in POLICIES:
         raise ConfigError(
             "config must set \"on_paralon_rental\" to one of: "
             + " | ".join(POLICIES)
-            + ". There is no default: decide what Vast should do while a "
-            "Paralon renter is on the machine.\n"
+            + f" (default {DEFAULT_POLICY}).\n"
             + "\n".join(f"  {k:<16} - {v}" for k, v in POLICY_HELP.items()))
 
     top_listing = _check_listing(raw.get("vast_listing", {}), "vast_listing")
@@ -180,7 +183,8 @@ def parse_config(raw, env=None):
 
     kwargs = {k: raw[k] for k in known if k in raw}
     for key in ("poll_interval_s", "paralon_min_get_interval_s",
-                "paralon_max_calls_per_min", "reclaim_retry_s"):
+                "paralon_max_calls_per_min", "reclaim_retry_s", "gpu_free_mib",
+                "fast_poll_s"):
         if key in kwargs and (isinstance(kwargs[key], bool)
                               or not isinstance(kwargs[key], int)
                               or kwargs[key] < 1):
@@ -188,10 +192,14 @@ def parse_config(raw, env=None):
                               f"(got {kwargs[key]!r})")
     if "docker_events" in kwargs and not isinstance(kwargs["docker_events"], bool):
         raise ConfigError("\"docker_events\" must be true or false (no quotes)")
+    imgs = kwargs.get("idle_job_images", [])
+    if not isinstance(imgs, list) or not all(isinstance(i, str) and i for i in imgs):
+        raise ConfigError("\"idle_job_images\" must be a list of image name prefixes")
     for key in ("state_file", "vastai_bin", "paralon_base_url"):
         if key in kwargs and (not isinstance(kwargs[key], str) or not kwargs[key]):
             raise ConfigError(f"\"{key}\" must be a non-empty string")
     kwargs["vast_listing"] = top_listing
+    kwargs["on_paralon_rental"] = policy
     cfg = Config(machines=machines, **kwargs)
     cfg.state_file = os.path.expanduser(cfg.state_file)
     cfg.paralon_api_key = env.get("PARALON_API_KEY", "").strip()
