@@ -16,6 +16,12 @@ group). Only these commands are run:
 Only Paralon's containers are ever stopped or started: the agent (found by its
 image, because it renames its own container when it updates) and the
 containers it started. Never a Vast container, and never a Paralon rental.
+
+It also keeps Paralon's Jupyter image on the machine (`pin_jupyter`). Paralon
+rents a node only while that image is present, and Vast's daemon deletes
+images no container uses within minutes once images pass 10% of the disk. A
+container that is created but never started (`docker create`) references the
+image, so the delete is refused. Never pulls: if the image is absent, nothing.
 """
 
 import logging
@@ -34,6 +40,22 @@ RENTAL = "rental"
 STOP_GRACE_S = 10
 # [user@]host -- never starting with "-", so it cannot be read as an ssh option.
 SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(@[A-Za-z0-9_][A-Za-z0-9._:-]*)?$")
+JUPYTER_IMAGE = PARALON_IMAGE_PREFIX + "jupyter:latest"
+PIN_LABEL = "vpdual.pin=jupyter"
+PIN_PREFIX = "vpdual-pin-jupyter-"
+# One shell pass: pin the CURRENT image id, drop pins on older ids. `docker
+# create` never starts the container; the inspect first means it never pulls.
+PIN_SCRIPT = (
+    f"id=$(docker image inspect -f '{{{{.Id}}}}' {JUPYTER_IMAGE} 2>/dev/null) "
+    "|| { echo absent; exit 0; }; "
+    "s=${id#sha256:}; s=$(printf %.12s \"$s\"); "
+    f"n={PIN_PREFIX}$s; "
+    "if docker ps -a --format '{{.Names}}' | grep -qx \"$n\"; then echo \"kept $s\"; "
+    f"else docker create --name \"$n\" --label {PIN_LABEL} {JUPYTER_IMAGE} /bin/true "
+    ">/dev/null && echo \"pinned $s\" || { echo failed; exit 1; }; fi; "
+    f"for o in $(docker ps -a --filter label={PIN_LABEL} --format '{{{{.Names}}}}'); do "
+    "[ \"$o\" = \"$n\" ] || { docker rm \"$o\" >/dev/null && echo \"removed $o\"; }; done"
+)
 PS_FORMAT = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.State}}\t{{.Label \"%s\"}}" % TYPE_LABEL
 
 
@@ -100,22 +122,35 @@ class DockerHost:
         self.timeout = timeout
 
     def _cmd(self, args):
-        if self.target == "local":
-            return ["docker", *args]
-        return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                self.target, "docker " + " ".join(shlex.quote(a) for a in args)]
+        return self._remote("docker " + " ".join(shlex.quote(a) for a in args),
+                            ["docker", *args])
 
-    def _docker(self, *args):
+    def _remote(self, shell, local_argv=None):
+        if self.target == "local":
+            return local_argv or ["sh", "-c", shell]
+        return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                self.target, shell]
+
+    def _exec(self, argv, what):
         try:
-            res = self._run(self._cmd(list(args)), capture_output=True,
-                            text=True, timeout=self.timeout)
+            res = self._run(argv, capture_output=True, text=True,
+                            timeout=self.timeout)
         except (OSError, subprocess.SubprocessError) as exc:
             raise AgentError(f"{self.target}: {exc}") from exc
         if res.returncode != 0:
             err = (res.stderr or res.stdout or "").strip().splitlines()
-            raise AgentError(f"{self.target}: docker {args[0]} exited "
+            raise AgentError(f"{self.target}: {what} exited "
                              f"{res.returncode}: {err[-1] if err else 'no output'}")
         return res.stdout
+
+    def _docker(self, *args):
+        return self._exec(self._cmd(list(args)), f"docker {args[0]}")
+
+    def pin_jupyter(self):
+        """Pin Paralon's Jupyter image. Returns the script's lines: 'absent',
+        'kept <id>' or 'pinned <id>', then any 'removed <old pin>'."""
+        return [ln.strip() for ln in self._exec(self._remote(PIN_SCRIPT),
+                                               "jupyter pin").splitlines() if ln.strip()]
 
     def containers(self):
         return parse_ps(self._docker("ps", "-a", "--no-trunc", "--format", PS_FORMAT))

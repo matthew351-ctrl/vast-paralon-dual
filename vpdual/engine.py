@@ -16,6 +16,9 @@ Rules (all modes):
      renter's GPU. While a Paralon rental is being reclaimed the agent stays
      up (it runs the reclaim). When no Vast renter is left, the agent is
      started again -- only if this tool stopped it.
+  Every pass, for a machine with `paralon_agent` set: keep Paralon's Jupyter
+  image pinned (Paralon rents a node only while it is present, and Vast's
+  daemon deletes unused images within minutes). Never pulls.
 
 Mode rules:
   vast     Paralon unavailable, Vast listed.
@@ -255,7 +258,23 @@ class Controller:
                         force_up=(mode == "vast"), vm=vm) and ok
         if m.paralon_agent:
             ok = self._agent(m, vast_renter, node) and ok
+            self._pin_jupyter(m)
         return ok
+
+    def _pin_jupyter(self, m):
+        """Keep Paralon's Jupyter image from Vast's image cleanup. A failure
+        is logged and retried next pass; it never holds anything else."""
+        if self.dry_run:
+            return
+        try:
+            lines = self.docker(m.paralon_agent).pin_jupyter()
+        except AgentError as exc:
+            self._decide(m, f"Jupyter pin failed, will retry: {exc}",
+                         logging.WARNING)
+            return
+        changed = [ln for ln in lines if ln.startswith(("pinned", "removed"))]
+        if changed:
+            self._decide(m, "Paralon's Jupyter image: " + "; ".join(changed))
 
     def _agent(self, m, vast_renter, node):
         """Rule 1, agent half: the Paralon agent is off while Vast rents."""

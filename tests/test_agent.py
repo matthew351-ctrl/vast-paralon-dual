@@ -140,7 +140,8 @@ class DockerUnreadable(Base):
         d = FakeDocker()
         d.fail_read = True
         self.assertTrue(self.ctl(FakeVast(), FakeParalon(), d).poll())
-        self.assertEqual(d.targets, [])
+        self.assertEqual(d.reads, 0)          # only the Jupyter pin ran
+        self.assertEqual(d.pins, 1)
 
     def test_not_configured_means_never_called(self):
         d = FakeDocker()
@@ -159,6 +160,43 @@ class StatusShowsTheAgent(Base):
         self.assertIn("Paralon agent via user@gpu1: running", text)
         self.assertIn("stop the Paralon agent", text)     # what a pass would do
         self.assertEqual(d.writes, [])
+
+
+class JupyterPin(Base):
+    def test_pinned_every_pass_and_logged_only_on_change(self):
+        d = FakeDocker()
+        d.pin_lines = ["pinned 526048b557bf", "removed vpdual-pin-jupyter-0ld1d0000000"]
+        c = self.ctl(FakeVast(), FakeParalon(), d)
+        with self.assertLogs("vpdual", "INFO") as logs:
+            c.poll()
+        self.assertIn("Paralon's Jupyter image: pinned 526048b557bf; removed",
+                      "\n".join(logs.output))
+        d.pin_lines = ["kept 526048b557bf"]
+        c.pass_decisions = []
+        c.poll()
+        self.assertEqual(d.pins, 2)
+        self.assertFalse([m for _, m in c.pass_decisions if "Jupyter" in m])
+
+    def test_also_beside_a_vast_renter(self):
+        d = FakeDocker()
+        self.ctl(FakeVast(running=1), FakeParalon(available=False), d).poll()
+        self.assertEqual(d.pins, 1)
+
+    def test_failure_warns_and_holds_nothing(self):
+        d = FakeDocker()
+        d.fail_pin = True
+        v, p = FakeVast(running=1), FakeParalon(available=True)
+        with self.assertLogs("vpdual", "WARNING") as logs:
+            self.ctl(v, p, d).poll()
+        self.assertIn("Jupyter pin failed", "\n".join(logs.output))
+        self.assertIn(("available", "node-1", False), p.writes)   # rule 1 still ran
+        self.assertEqual(d.writes[0], ("stop", ["agent1"]))
+
+    def test_dry_run_and_unmanaged_never_pin(self):
+        d = FakeDocker()
+        self.ctl(FakeVast(), FakeParalon(), d, dry_run=True).poll()
+        self.ctl(FakeVast(), FakeParalon(), d, agent="").poll()
+        self.assertEqual(d.pins, 0)
 
 
 class DockerHostCommands(unittest.TestCase):
@@ -193,6 +231,21 @@ class DockerHostCommands(unittest.TestCase):
             raise FileNotFoundError("ssh")
         with self.assertRaises(AgentError):
             DockerHost("h1", run=run).containers()
+
+    def test_jupyter_pin_runs_one_shell_and_never_pulls(self):
+        calls, run = self.run_recorder(stdout="pinned 526048b557bf\n")
+        self.assertEqual(DockerHost("local", run=run).pin_jupyter(),
+                         ["pinned 526048b557bf"])
+        self.assertEqual(calls[0][:2], ["sh", "-c"])
+        script = calls[0][2]
+        self.assertNotIn("docker pull", script)
+        self.assertNotIn("docker run", script)          # create, never start
+        self.assertIn("docker image inspect", script)
+        self.assertLess(script.index("image inspect"), script.index("docker create"))
+        calls, run = self.run_recorder(stdout="absent\n")
+        DockerHost("me@gpu1", run=run).pin_jupyter()
+        self.assertEqual(calls[0][5], "me@gpu1")
+        self.assertIn("docker create", calls[0][6])
 
     def test_option_like_targets_are_refused(self):
         for bad in ("-oProxyCommand=x", "", "a b", "user@-x", "x;rm"):

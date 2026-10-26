@@ -15,6 +15,13 @@ memory, and when one is killed Paralon re-benchmarks the node, which can mark
 it failed. With the agent stopped nothing can start them; when the Vast
 renter leaves, the agent is started again.
 
+**Paralon's Jupyter image is kept on the machine.** Paralon rents a node only
+while `ghcr.io/paraloncloud/jupyter` is present ("not ready: no jupyter image
+present" otherwise), and Vast's daemon deletes images that no container uses
+within minutes once images pass 10% of the disk. Every pass, the tool keeps a
+created-but-never-started container on that image, which makes the delete
+refuse.
+
 ## Before you start
 
 This tool switches listings; it does not install Paralon. Each GPU machine
@@ -172,6 +179,12 @@ read holds on its own.
    A Paralon rental's container and Vast's containers are never touched. If
    Docker restarts and brings the agent back during the rental, the next pass
    stops it again.
+   Every pass (any mode, rented or not) it also keeps Paralon's Jupyter image
+   pinned: one `docker create`d container named `vpdual-pin-jupyter-<image id>`,
+   never started. When Paralon publishes a new image, the next pass pins the
+   new one and removes the old pin. It never pulls: if the image is not on the
+   machine yet (the Paralon agent downloads it when it starts), nothing happens
+   until it is.
 2. **Paralon rented, no Vast renter** (dual mode): per `on_paralon_rental`
    (required, no default):
    - `keep_vast_listed`: Vast stays listed. Paralon is interruptible fill; a
@@ -283,7 +296,9 @@ restart.
   (or an agent start is owed), `docker stop -t 10 <id>`
   for the agent and then the containers it started, `docker start <id>` for
   the agent. The agent is found by its image (`ghcr.io/paraloncloud/agent`),
-  because it renames its own container when it updates.
+  because it renames its own container when it updates. Each pass also runs
+  one short shell command for the Jupyter pin: `docker image inspect`, then
+  `docker create` only if the pin is missing, and `docker rm` of older pins.
 - Vast (`vastai` CLI, checked against version 1.3.0):
   `vastai show machines --raw`, `vastai list machine <id> --price_gpu ...
   --price_min_bid ... --price_disk ... --price_inetu ... --price_inetd ...
@@ -307,9 +322,10 @@ restart.
 - A node whose benchmark was killed beside a Vast renter may show
   verification "failed". Paralon retries about every 31 minutes; it passes
   once a retry runs while no Vast renter is on the machine.
-- For fast Paralon starts, keep the Paralon Jupyter image on the machine. A
-  stopped container that references the image stops Docker's image cleanup
-  from removing it. This is not automated.
+- The Jupyter pin needs `paralon_agent` (it uses the same Docker access).
+  Without it, Vast's image cleanup can delete Paralon's Jupyter image and the
+  node shows "not ready" until the Paralon agent downloads it again, which it
+  does only when it starts.
 
 ## Compliance
 
@@ -321,7 +337,7 @@ This tool stops only Paralon's agent and its containers, never Vast's.
 ## Possible future work
 
 A price floor (pause Paralon below a set price), options for paused/stopped
-instances, and keeping the Paralon image present automatically. If Paralon
+instances. If Paralon
 adds an inference/benchmark switch for paused nodes, stopping the agent will
 no longer be needed.
 

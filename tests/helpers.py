@@ -124,6 +124,10 @@ class FakeDocker:
         self.fail_write = False
         self.targets = []
         self.writes = []
+        self.reads = 0
+        self.pins = 0
+        self.pin_lines = ["kept 526048b557bf"]
+        self.fail_pin = False
         if agent:
             self.add("agent1", "ghcr.io/paraloncloud/agent:latest",
                      "paralon-agent", agent_running)
@@ -140,7 +144,14 @@ class FakeDocker:
     def get(self, cid):
         return next(c for c in self.containers_ if c.id == cid)
 
+    def pin_jupyter(self):
+        self.pins += 1
+        if self.fail_pin:
+            raise AgentError("ssh: connect timed out")
+        return list(self.pin_lines)
+
     def containers(self):
+        self.reads += 1
         if self.fail_read:
             raise AgentError("ssh: connect timed out")
         return [Container(**vars(c)) for c in self.containers_]
