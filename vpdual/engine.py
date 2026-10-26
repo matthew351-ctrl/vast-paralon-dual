@@ -65,8 +65,21 @@ from .vast import VastError
 
 log = logging.getLogger("vpdual")
 
+
+class _NotRented:
+    rented = False
+
+
+_NOT_RENTED = _NotRented()
+
+
+def _offline(node):
+    """The node reads OFFLINE on Paralon (its agent is not connected)."""
+    raw = getattr(node, "raw", None) or {}
+    return raw.get("online") is False or raw.get("state") == "offline"
+
 ON_DEMAND_WARN_EVERY_S = 3600
-FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while recovering -- once a minute, as our fleet does
+FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while recovering or a node is rented -- once a minute, as our fleet does
 
 
 def describe_listing(listing):
@@ -175,7 +188,13 @@ class Controller:
         raises VastError / ParalonError."""
         vms = self.vast.read_machines()
         fresh = False
-        if self.recovering and self.clock() - self._last_forced_nodes >= FORCED_NODES_EVERY_S:
+        # Once a minute while it matters (a machine recovering, or one of our
+        # nodes rented); otherwise every paralon_min_get_interval_s (120 s) --
+        # a once-a-minute read all day is ~1440 calls on its own.
+        busy = self.recovering or any(
+            (self.paralon.cached_node(m.paralon_node_id) or _NOT_RENTED).rented
+            for m in self.cfg.machines)
+        if busy and self.clock() - self._last_forced_nodes >= FORCED_NODES_EVERY_S:
             fresh, self._last_forced_nodes = True, self.clock()
         nodes = {n.id: n for n in self.paralon.list_nodes(refresh=fresh)}
         return vms, nodes
@@ -268,6 +287,10 @@ class Controller:
         policy = self.cfg.on_paralon_rental
 
         paralon_off = vast_renter or mode == "vast" or parked
+        # An OFFLINE node cannot be rented, whatever `available` says (its agent
+        # is stopped while Vast rents): no pause write for it. Our fleet looped
+        # on that write all night once the API refused it (v0.4.3).
+        paralon_up = node.available and not _offline(node)
         vast_off = mode == "paralon" or (
             mode == "dual" and node.rented and not vast_renter
             and policy == "unlist_vast")
@@ -275,7 +298,7 @@ class Controller:
         # Pause Paralon BEFORE reclaiming, so a reclaimed node is not open to
         # a new rental in the gap between the two calls.
         ok = self._side(m, "paralon", want_off=paralon_off,
-                        is_up=node.available, force_up=(mode == "paralon"),
+                        is_up=paralon_up, force_up=(mode == "paralon"),
                         node=node, block=self._paralon_block(m, machine))
         # Rule 1 (every mode): a Vast renter wins the GPU.
         if vast_renter and node.rented:

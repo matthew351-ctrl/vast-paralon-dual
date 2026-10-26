@@ -275,7 +275,7 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | `vast_listing` | optional fallback listing terms (see Relist prices); keys map to `vastai list machine` flags: `price_gpu`, `price_min_bid`, `price_disk`, `price_inetu`, `price_inetd`, `discount_rate`, `min_chunk`, `end_date` or `duration` (not both), `vol_size`, `vol_price` |
 | `state_file` | default `~/.local/state/vast-paralon-dual/state.json` |
 | `poll_interval_s` | seconds between passes (default 60) |
-| `paralon_min_get_interval_s` | minimum seconds between `GET /nodes` (default 60) |
+| `paralon_min_get_interval_s` | minimum seconds between `GET /nodes` while nothing is happening (default 120; once a minute while recovering or rented) |
 | `paralon_max_calls_per_min` | hard cap on Paralon calls (default 4) |
 | `reclaim_retry_s` | do not repeat a reclaim sooner than this (default 300) |
 | `vastai_bin` | path to `vastai` (`init` writes the full path) |
@@ -317,9 +317,11 @@ restart.
 
 - Paralon (`https://paraloncloud.com/api/v1`, `Authorization: Bearer prlc_...`):
   `GET /nodes`, `PATCH /nodes/{id}` with `{"available": true|false}`,
-  `POST /nodes/{id}/reclaim` (spot only). At most one `GET /nodes` a minute
-  (shared by all machines), at most 4 calls a minute, exponential back-off on
-  429, 409, 5xx and network errors. With many machines changing in the same
+  `POST /nodes/{id}/reclaim` (spot only). One `GET /nodes` every 2 minutes
+  (shared by all machines), once a minute only while a machine is recovering
+  or one of its nodes is rented; at most 4 calls a minute; exponential
+  back-off on every HTTP error and on network errors. No pause write is sent
+  for a node that reads OFFLINE (it cannot be rented). With many machines changing in the same
   minute, writes beyond the limit wait for a later pass.
 - Docker on each GPU machine (only with `paralon_agent`; directly, or one
   `ssh -o BatchMode=yes user@host docker ...` per command):

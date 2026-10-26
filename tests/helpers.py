@@ -97,6 +97,9 @@ class FakeParalon:
         self.refreshes = getattr(self, "refreshes", 0) + bool(refresh)
         if self.fail_read:
             raise ParalonError("HTTP 503")
+        return self._build()
+
+    def _build(self):
         out = []
         for nid, n in self.nodes.items():
             out.append(ParalonNode(
@@ -109,7 +112,8 @@ class FakeParalon:
         return out
 
     def cached_node(self, node_id):
-        for n in self.list_nodes():
+        # like the real client: the last read, no API call (not counted)
+        for n in self._build():
             if n.id == node_id:
                 return n
         return None

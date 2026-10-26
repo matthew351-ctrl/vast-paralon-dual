@@ -6,9 +6,9 @@ Endpoints used:
   POST  /nodes/{id}/reclaim     end a SPOT rental (the renter gets 2 min notice)
 
 Be gentle with the API: GET /nodes is served from a cache for
-`min_get_interval_s` (60 s by default), all calls share a sliding window of
-`max_calls_per_min` (4 by default), and 429 / 409 / 5xx / network errors
-start an exponential back-off during which no call is made.
+`min_get_interval_s` (120 s by default), all calls share a sliding window of
+`max_calls_per_min` (4 by default), and every HTTP error and network error
+starts an exponential back-off during which no call is made.
 """
 
 import json
@@ -23,7 +23,6 @@ log = logging.getLogger("vpdual.paralon")
 from . import __version__
 
 USER_AGENT = f"vast-paralon-dual/{__version__}"
-BACKOFF_STATUSES = {409, 429}
 BACKOFF_BASE_S = 30
 BACKOFF_MAX_S = 600
 MAX_WAIT_FOR_SLOT_S = 20
@@ -97,7 +96,7 @@ class ParalonNode:
 
 
 class ParalonClient:
-    def __init__(self, base_url, api_key, *, min_get_interval_s=60,
+    def __init__(self, base_url, api_key, *, min_get_interval_s=120,
                  max_calls_per_min=4, opener=None, clock=time.monotonic,
                  sleep=time.sleep, timeout=20):
         self.base_url = base_url.rstrip("/")
@@ -167,20 +166,21 @@ class ParalonClient:
                 detail = ""
             if detail:
                 log.warning("%s %s -> HTTP %s: %s", method, path, code, detail)
-            if code in BACKOFF_STATUSES or code >= 500:
-                retry_after = None
-                try:
-                    retry_after = float(exc.headers.get("Retry-After"))
-                except (TypeError, ValueError, AttributeError):
-                    pass
-                delay = self._start_backoff(retry_after)
-                raise ParalonError(
-                    f"{method} {path} -> HTTP {code}; backing off {delay:.0f}s")
+            # EVERY HTTP error backs off (v0.4.3): a 400/404 that kept
+            # failing used to be retried every pass.
+            retry_after = None
+            try:
+                retry_after = float(exc.headers.get("Retry-After"))
+            except (TypeError, ValueError, AttributeError):
+                pass
+            delay = self._start_backoff(retry_after)
             if code in (401, 403):
                 raise ParalonError(
                     f"{method} {path} -> HTTP {code}: check PARALON_API_KEY "
-                    "and that it has the \"My nodes\" permission")
-            raise ParalonError(f"{method} {path} -> HTTP {code}")
+                    "and that it has the \"My nodes\" permission; backing off "
+                    f"{delay:.0f}s")
+            raise ParalonError(
+                f"{method} {path} -> HTTP {code}; backing off {delay:.0f}s")
         except (urllib.error.URLError, OSError) as exc:
             delay = self._start_backoff()
             raise ParalonError(

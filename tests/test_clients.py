@@ -73,14 +73,14 @@ class ParalonClientTests(unittest.TestCase):
             ("POST", "/nodes/node-1/reclaim", None)])
         self.assertEqual(http.requests[0][3], "Bearer " + KEY)
 
-    def test_get_nodes_cached_for_a_minute(self):
+    def test_get_nodes_cached_for_two_minutes(self):
         http, clock = FakeHTTP([node()]), Clock()
         c = paralon(http, clock)
         c.get_node("node-1")
-        clock.t = 30
+        clock.t = 90
         c.get_node("node-1")
         self.assertEqual(len(http.requests), 1)
-        clock.t = 61
+        clock.t = 121
         c.get_node("node-1")
         self.assertEqual(len(http.requests), 2)
 

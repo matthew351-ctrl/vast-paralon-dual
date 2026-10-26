@@ -226,6 +226,38 @@ class Rule4HoldOnUnreadableState(Base):
         self.assertIn("not found", self.mstate(222)["decisions"][-1]["msg"])
 
 
+class ApiBudget(Base):
+    """v0.4.3: no pause write for an OFFLINE node; GET /nodes every 2 min
+    unless a machine recovers or a node is rented."""
+
+    def test_offline_node_under_a_vast_renter_gets_no_write(self):
+        v, p = FakeVast(running=1), FakeParalon(available=True)
+        p.nodes["node-1"]["online"] = False
+        c = self.ctl(v, p)
+        c.poll()
+        self.assertNotIn(OFF, p.writes)
+
+    def test_online_node_under_a_vast_renter_is_paused(self):
+        v, p = FakeVast(running=1), FakeParalon(available=True)
+        c = self.ctl(v, p)
+        c.poll()
+        self.assertIn(OFF, p.writes)
+
+    def test_a_rented_node_forces_the_minute_read(self):
+        v, p = FakeVast(), FakeParalon(rented=True)
+        c = self.ctl(v, p, policy="unlist_vast")
+        p.refreshes = 0
+        c.poll()
+        self.assertEqual(p.refreshes, 1)
+
+    def test_nothing_happening_uses_the_cache(self):
+        v, p = FakeVast(), FakeParalon(available=True)
+        c = self.ctl(v, p)
+        p.refreshes = 0
+        c.poll()
+        self.assertEqual(p.refreshes, 0)
+
+
 class MultiMachine(Base):
     def setup3(self):
         v = FakeVast(running=1).add(222, listed=True).add(333, listed=True)

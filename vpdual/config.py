@@ -73,7 +73,7 @@ class Config:
     state_file: str = DEFAULT_STATE
     poll_interval_s: int = 60
     paralon_base_url: str = "https://paraloncloud.com/api/v1"
-    paralon_min_get_interval_s: int = 60
+    paralon_min_get_interval_s: int = 120
     paralon_max_calls_per_min: int = 4
     reclaim_retry_s: int = 300
     vastai_bin: str = "vastai"
