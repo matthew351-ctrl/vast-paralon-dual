@@ -66,7 +66,7 @@ from .vast import VastError
 log = logging.getLogger("vpdual")
 
 ON_DEMAND_WARN_EVERY_S = 3600
-FORCED_NODES_EVERY_S = 15     # fresh GET /nodes while recovering (4 calls/min budget)
+FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while recovering -- once a minute, as our fleet does
 
 
 def describe_listing(listing):

@@ -217,8 +217,8 @@ read holds on its own.
    machine is **recovering**: passes run every `fast_poll_s` (5 s) until the
    GPU is actually free (no compute process, at most `gpu_free_mib` in use),
    then the agent is started, then it waits until the node shows online on
-   Paralon (a fresh `GET /nodes` at most every 15 s, inside the 4 calls a
-   minute), and only then sets it available. These flags live in the
+   Paralon (a fresh `GET /nodes` once a minute, as Paralon's docs advise),
+   and only then sets it available. These flags live in the
    state file, saved before each unlist/pause/stop and cleared only when a
    later read shows the side back, so a restart never loses one. A side you
    unlist or pause by hand, or an agent you stop by hand, is left alone. The

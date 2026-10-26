@@ -99,9 +99,9 @@ class Rule3RecoveryAfterTheVastRenter(Base):
         c.poll()                                            # first fresh read
         r0 = p.refreshes
         self.assertEqual(r0, 1)
-        c.poll()                                            # within 15 s: cached
+        c.poll()                                            # within 60 s: cached
         self.assertEqual(p.refreshes, r0)
-        now[0] += 16
+        now[0] += 61
         c.poll()
         self.assertEqual(p.refreshes, r0 + 1)
 
