@@ -345,9 +345,10 @@ restart.
   starting.
 - On a Vast host, the Paralon agent needs **Docker 29.2 or newer** to see the
   GPU. Upgrade using Vast's own host instructions; this tool does not.
-- Paralon's agent starts inference, downloads and benchmarks even on a
-  paused node, and there is no API switch for them. That is why the agent is
-  stopped during Vast rentals; in the seconds before the pass that stops
+- Since 2026-10-26 Paralon runs no inference or render jobs on **spot**
+  nodes; an on-demand node can still get them, and either can get a
+  verification benchmark (e.g. after a rental). The agent is still stopped
+  during Vast rentals, so nothing of Paralon's can start beside the renter; in the seconds before the pass that stops
   it, a Paralon inference worker can still hold GPU memory beside it.
 - **Container DNS.** Paralon's containers use Docker's default DNS. If your
   `daemon.json` names a LAN resolver that a firewall blocks for containers,
