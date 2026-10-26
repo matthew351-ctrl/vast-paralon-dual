@@ -291,6 +291,26 @@ class Bursts(Base):
         self.assertFalse(c.bursting)
 
 
+class OnDemandCadence(Base):
+    def test_on_demand_waiting_reads_once_a_minute(self):
+        now = [1000.0]
+        v, p = FakeVast(), FakeParalon(available=True, spot=False)
+        c = self.ctl(v, p, clock=lambda: now[0])
+        p.refreshes = 0
+        c.poll()
+        now[0] += 60
+        c.poll()
+        self.assertEqual(p.refreshes, 2)
+
+    def test_spot_waiting_uses_the_cache(self):
+        now = [1000.0]
+        v, p = FakeVast(), FakeParalon(available=True, spot=True)
+        c = self.ctl(v, p, clock=lambda: now[0])
+        p.refreshes = 0
+        c.poll()
+        self.assertEqual(p.refreshes, 0)
+
+
 class MultiMachine(Base):
     def setup3(self):
         v = FakeVast(running=1).add(222, listed=True).add(333, listed=True)

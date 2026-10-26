@@ -73,13 +73,25 @@ class _NotRented:
 _NOT_RENTED = _NotRented()
 
 
+def _needs_the_minute(node):
+    """Read once a minute: a node rented, or an ON-DEMAND node waiting online.
+    A Paralon rental whose container shows up late is seen only through the
+    API, and an on-demand rental cannot be reclaimed if a Vast renter takes
+    the GPU meanwhile (v0.4.5). A spot node waiting is read every 2 minutes."""
+    if node is None:
+        return False
+    if node.rented:
+        return True
+    return bool(node.available) and node.spot is False and not _offline(node)
+
+
 def _offline(node):
     """The node reads OFFLINE on Paralon (its agent is not connected)."""
     raw = getattr(node, "raw", None) or {}
     return raw.get("online") is False or raw.get("state") == "offline"
 
 ON_DEMAND_WARN_EVERY_S = 3600
-FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while a node is rented -- once a minute, as our fleet does
+FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while a node is rented or an on-demand node waits -- as our fleet does
 # BURSTS at critical moments (v0.4.4): after a write that landed, a Vast renter
 # or a Paralon container starting on a machine, and while a machine recovers
 # after a Vast rental, GET /nodes is read fresh every BURST_EVERY_S. 30 s keeps
@@ -211,7 +223,7 @@ class Controller:
         every = None
         if self.recovering or self.bursting:
             every = BURST_EVERY_S                 # a critical moment
-        elif any((self.paralon.cached_node(m.paralon_node_id) or _NOT_RENTED).rented
+        elif any(_needs_the_minute(self.paralon.cached_node(m.paralon_node_id))
                  for m in self.cfg.machines):
             every = FORCED_NODES_EVERY_S
         if every and self.clock() - self._last_forced_nodes >= every:
