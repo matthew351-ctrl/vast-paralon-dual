@@ -13,6 +13,8 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from .agent import valid_target
+
 POLICIES = ("keep_vast_listed", "unlist_vast")
 POLICY_HELP = {
     "keep_vast_listed": "Vast stays listed while Paralon is rented; a Vast "
@@ -56,6 +58,10 @@ class Machine:
     # Fallback listing terms: top-level `vast_listing` overlaid with this
     # machine's own `vast_listing`. Used only where no saved value exists.
     vast_listing: dict = field(default_factory=dict)
+    # How to reach Docker on this GPU machine, to stop the Paralon agent
+    # while a Vast renter has the GPU: "local" or "user@host" (ssh). Empty =
+    # not managed (the agent keeps running beside Vast renters).
+    paralon_agent: str = ""
 
 
 @dataclass
@@ -139,7 +145,8 @@ def parse_config(raw, env=None):
         if not isinstance(entry, dict):
             raise ConfigError(f"{where} must be an object")
         unknown = sorted(k for k in entry if not k.startswith("_") and k not in
-                         ("vast_machine_id", "paralon_node_id", "vast_listing"))
+                         ("vast_machine_id", "paralon_node_id", "vast_listing",
+                          "paralon_agent"))
         if unknown:
             raise ConfigError(f"unknown {where} keys: {', '.join(unknown)}")
         try:
@@ -158,7 +165,11 @@ def parse_config(raw, env=None):
         listing = dict(top_listing)
         listing.update(_check_listing(entry.get("vast_listing", {}),
                                       f"{where}.vast_listing"))
-        machines.append(Machine(vid, node, listing))
+        agent = entry.get("paralon_agent", "")
+        if agent and (not isinstance(agent, str) or not valid_target(agent)):
+            raise ConfigError(f"{where}.paralon_agent must be \"local\" or "
+                              f"user@host for ssh (got {agent!r})")
+        machines.append(Machine(vid, node, listing, agent or ""))
 
     known = set(Config.__dataclass_fields__) - {"paralon_api_key", "machines"}
     unknown = sorted(k for k in raw if k not in known and not k.startswith("_")

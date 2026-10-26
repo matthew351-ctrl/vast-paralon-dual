@@ -10,6 +10,12 @@ Rules (all modes):
   1. A Vast renter is running -> Paralon goes unavailable. If Paralon also
      has a running rental on a SPOT node, reclaim it (Vast wins). An
      on-demand rental cannot be reclaimed: warn.
+     For a machine with `paralon_agent` set, the Paralon agent is stopped
+     too, then the containers it started (inference, downloads, benchmarks):
+     a paused node's agent keeps starting them, and they take the Vast
+     renter's GPU. While a Paralon rental is being reclaimed the agent stays
+     up (it runs the reclaim). When no Vast renter is left, the agent is
+     started again -- only if this tool stopped it.
 
 Mode rules:
   vast     Paralon unavailable, Vast listed.
@@ -37,6 +43,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+from .agent import AgentError, DockerHost, agent_of, leftovers
 from .config import REQUIRED_PRICES
 from .paralon import ParalonError
 from .state import MAX_DECISIONS, MODES
@@ -59,8 +66,9 @@ def describe_listing(listing):
 
 class Controller:
     def __init__(self, cfg, vast, paralon, store, *, dry_run=False,
-                 clock=time.time):
+                 clock=time.time, docker=DockerHost):
         self.cfg = cfg
+        self.docker = docker          # target -> DockerHost (a fake in tests)
         self.vast = vast
         self.paralon = paralon
         self.store = store
@@ -245,7 +253,70 @@ class Controller:
             self._dirty = True
         ok = self._side(m, "vast", want_off=vast_off, is_up=vm.listed,
                         force_up=(mode == "vast"), vm=vm) and ok
+        if m.paralon_agent:
+            ok = self._agent(m, vast_renter, node) and ok
         return ok
+
+    def _agent(self, m, vast_renter, node):
+        """Rule 1, agent half: the Paralon agent is off while Vast rents."""
+        st = self.mstate(m)
+        flags = st["took_off"]
+        if not vast_renter and not flags["agent"]:
+            return True               # nothing to stop, no start owed
+        try:
+            containers = self.docker(m.paralon_agent).containers()
+        except AgentError as exc:
+            self._decide(m, f"hold: cannot read Docker for the Paralon agent "
+                         f"({exc})", logging.WARNING)
+            return False
+        agent = agent_of(containers)
+        if agent is None:
+            self._decide(m, f"no Paralon agent container on {m.paralon_agent}; "
+                         "nothing to stop or start", logging.WARNING)
+            return True
+        if vast_renter:
+            if node.rented:
+                if agent.running:
+                    self._decide(m, "Paralon agent stays up until the Paralon "
+                                 "rental ends (it runs the reclaim)")
+                return True
+            extra = leftovers(containers)
+            names = ", ".join(c.name for c in extra)
+            if agent.running:
+                self._decide(m, "Vast renter running: stop the Paralon agent"
+                             + (f", then {names}" if extra else ""))
+                if not flags["agent"]:
+                    flags["agent"] = True
+                    self._save()      # the owed start is on disk first
+                ids = [[agent.id]] + ([[c.id for c in extra]] if extra else [])
+            elif extra:
+                self._decide(m, f"Vast renter running: stop Paralon's "
+                             f"containers ({names})")
+                ids = [[c.id for c in extra]]
+            else:
+                return True
+            # Agent first, so it is gone before the containers it watches stop.
+            return all(self._docker_write(m, "stop", group) for group in ids)
+        if not flags["agent"]:
+            return True               # someone else stopped it: leave it
+        if agent.running:
+            flags["agent"] = False    # confirmed back
+            self._decide(m, "Paralon agent is running again; flag cleared")
+            return True
+        self._decide(m, "no Vast renter: start the Paralon agent")
+        return self._docker_write(m, "start", agent.id)
+
+    def _docker_write(self, m, verb, arg):
+        if self.dry_run:
+            return True
+        try:
+            host = self.docker(m.paralon_agent)
+            host.stop(arg) if verb == "stop" else host.start(arg)
+        except AgentError as exc:
+            self._decide(m, f"Paralon agent {verb} failed, will retry: {exc}",
+                         logging.WARNING)
+            return False
+        return True
 
     # -- helpers -------------------------------------------------------
     def _warn_on_demand(self, m):

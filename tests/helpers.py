@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 
+from vpdual.agent import AgentError, Container
 from vpdual.config import Config, Machine
 from vpdual.paralon import ParalonError, ParalonNode
 from vpdual.state import StateStore
@@ -113,13 +114,59 @@ class FakeParalon:
         self.writes.append(("reclaim", node_id))
 
 
+class FakeDocker:
+    """Docker on one GPU machine: an agent plus whatever is `add`ed. Call the
+    instance with a target to get it back, as the Controller's `docker`."""
+
+    def __init__(self, agent=True, agent_running=True):
+        self.containers_ = []
+        self.fail_read = False
+        self.fail_write = False
+        self.targets = []
+        self.writes = []
+        if agent:
+            self.add("agent1", "ghcr.io/paraloncloud/agent:latest",
+                     "paralon-agent", agent_running)
+
+    def add(self, cid, image, name, running=True, paralon_type=""):
+        self.containers_.append(Container(cid, image, name, running,
+                                          paralon_type))
+        return self
+
+    def __call__(self, target):
+        self.targets.append(target)
+        return self
+
+    def get(self, cid):
+        return next(c for c in self.containers_ if c.id == cid)
+
+    def containers(self):
+        if self.fail_read:
+            raise AgentError("ssh: connect timed out")
+        return [Container(**vars(c)) for c in self.containers_]
+
+    def stop(self, ids):
+        self.writes.append(("stop", list(ids)))
+        if self.fail_write:
+            raise AgentError("docker stop exited 1")
+        for cid in ids:
+            self.get(cid).running = False
+
+    def start(self, cid):
+        self.writes.append(("start", cid))
+        if self.fail_write:
+            raise AgentError("docker start exited 1")
+        self.get(cid).running = True
+
+
 def make_config(state_file, policy="keep_vast_listed", machines=None,
-                listing=None):
+                listing=None, agent=""):
     listing = {"price_gpu": 0.5, "price_min_bid": 0.3, "duration": "14 days"} \
         if listing is None else listing
     machines = machines or [(111, "node-1")]
     return Config(
-        machines=[Machine(vid, nid, dict(listing)) for vid, nid in machines],
+        machines=[Machine(vid, nid, dict(listing), agent)
+                  for vid, nid in machines],
         on_paralon_rental=policy, vast_listing=dict(listing),
         state_file=state_file, paralon_api_key="prlc_test_secret")
 

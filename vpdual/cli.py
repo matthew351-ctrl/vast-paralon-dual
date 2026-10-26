@@ -10,6 +10,7 @@ import threading
 import time
 
 from . import __version__
+from .agent import AgentError, agent_of
 from .config import ConfigError, config_path, load_config
 from .docker_events import start_watcher
 from .engine import Controller, describe_listing
@@ -99,7 +100,18 @@ def cmd_status(ctl, cfg, machine_id, out=print):
         out(f"\nVast {m.vast_machine_id} <-> Paralon {m.paralon_node_id}")
         out(f"  mode: {st['mode'] or '(not set: run `mode dual`)'}")
         out(f"  took off (owed): vast={st['took_off']['vast']} "
-            f"paralon={st['took_off']['paralon']}")
+            f"paralon={st['took_off']['paralon']} "
+            f"agent stopped={st['took_off']['agent']}")
+        if m.paralon_agent:
+            try:
+                agent = agent_of(ctl.docker(m.paralon_agent).containers())
+                seen = ("not found" if agent is None else
+                        "running" if agent.running else "stopped")
+            except (AgentError, ValueError) as exc:
+                seen = f"unreadable ({exc})"
+            out(f"  Paralon agent via {m.paralon_agent}: {seen}")
+        else:
+            out("  Paralon agent: not managed (no paralon_agent in the config)")
         relist = ctl.relist_listing(m)
         if st["saved_listing"]:
             out(f"  saved listing: {describe_listing(st['saved_listing'])}")

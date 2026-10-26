@@ -85,7 +85,7 @@ class Init(TempDirMixin, unittest.TestCase):
 
     def test_interactive_writes_a_valid_config(self):
         node = fixture("fixture_paralon_nodes.json")["nodes"][0]["id"]
-        ask = Answers("2", "1")           # unlist_vast; pair 12345 with node 1
+        ask = Answers("2", "1", "")       # unlist_vast; 12345 -> node 1; agent skip
         args = init_args(self.cfg_path)
         code = self.run_init(args, ask=ask)
         self.assertEqual(code, 0, self.out)
@@ -125,7 +125,7 @@ class Init(TempDirMixin, unittest.TestCase):
     def test_multi_machine_pairing_and_skip(self):
         v = FakeVast().add(222).add(333, listed=False)
         p = FakeParalon().add("node-2")
-        ask = Answers("1", "2", "", "1", "", "")   # 111->node-2, 222 skip...
+        ask = Answers("1", "2", "", "1", "", "", "")   # 111->node-2, 222 skip...
         # policy 1; 111 -> node #2 ("node-2"); 222 -> skip; 333 -> node #1;
         # 333 is unlisted -> asked for a fallback price -> skip
         args = init_args(self.cfg_path)
@@ -136,6 +136,48 @@ class Init(TempDirMixin, unittest.TestCase):
         self.assertEqual(pairs, [(111, "node-2"), (333, "node-1")])
         self.assertIn("unlisted now", "\n".join(self.out))
         self.assertEqual((v.reads, p.reads), (1, 1))
+
+    def test_agent_option_written_and_checked(self):
+        from helpers import FakeDocker
+        d = FakeDocker()
+        args = init_args(self.cfg_path, "--policy", "keep_vast_listed",
+                         "--pair", "12345=00000000-0000-0000-0000-000000000001",
+                         "--agent", "12345=me@gpu1")
+        code = run_init(args, env=self.env, which=lambda b: "/usr/bin/vastai",
+                        ask=Answers(), out=self.out.append, vast=FixtureVast(),
+                        paralon=FixtureParalon(), docker=d)
+        self.assertEqual(code, 0, self.out)
+        self.assertEqual(self.loaded().machines[0].paralon_agent, "me@gpu1")
+        self.assertEqual(d.targets, ["me@gpu1"])
+        self.assertIn("Paralon agent found via me@gpu1 (running)",
+                      "\n".join(self.out))
+        self.assertEqual(d.writes, [])            # init only reads
+
+    def test_bad_agent_option_refused(self):
+        for bad in ("12345=-oProxyCommand=x", "99999=local", "local"):
+            args = init_args(self.cfg_path, "--policy", "keep_vast_listed",
+                             "--pair", "12345=00000000-0000-0000-0000-000000000001",
+                             "--agent", bad, "--force")
+            self.assertEqual(self.run_init(args), 2, bad)
+            self.assertIn("--agent", self.out[-1])
+
+    def test_interactive_agent_answer(self):
+        from helpers import FakeDocker
+        d = FakeDocker(agent=False)
+        ask = Answers("1", "1", "bad target", "local")
+        code = run_init(init_args(self.cfg_path), env=self.env,
+                        which=lambda b: "/usr/bin/vastai", ask=ask,
+                        out=self.out.append, vast=FixtureVast(),
+                        paralon=FixtureParalon(), docker=d)
+        self.assertEqual(code, 0, self.out)
+        self.assertEqual(self.loaded().machines[0].paralon_agent, "local")
+        self.assertIn("no Paralon agent container found", "\n".join(self.out))
+
+    def test_skipped_agent_is_explained(self):
+        args = init_args(self.cfg_path, "--policy", "keep_vast_listed",
+                         "--pair", "12345=00000000-0000-0000-0000-000000000001")
+        self.assertEqual(self.run_init(args), 0, self.out)
+        self.assertIn("Paralon agent is not managed", "\n".join(self.out))
 
     def test_refuses_without_key(self):
         code = self.run_init(init_args(self.cfg_path), env={})

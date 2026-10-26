@@ -1,12 +1,14 @@
 """A small JSON state file, written atomically.
 
-Per Vast machine it records the mode, which side THIS tool took off, and the
+Per Vast machine it records the mode, which side THIS tool took off (and
+whether it stopped the Paralon agent), and the
 listing terms the Vast machine had just before the tool unlisted it, so a
 restart never forgets to relist something (and never relists something it did
 not unlist), and a relist restores the machine's own prices.
 
     {"machines": {"123": {"mode": "dual",
-                          "took_off": {"vast": false, "paralon": false},
+                          "took_off": {"vast": false, "paralon": false,
+                                       "agent": false},
                           "saved_listing": null,
                           "reclaim_sent_at": null,
                           "decisions": [...]}}}
@@ -24,8 +26,9 @@ MAX_DECISIONS = 30
 def default_machine_state():
     return {
         "mode": None,
-        # True = this tool took that side off and owes it a relist.
-        "took_off": {"vast": False, "paralon": False},
+        # True = this tool took that side off and owes it a relist; "agent":
+        # it stopped the Paralon agent and owes it a start.
+        "took_off": {"vast": False, "paralon": False, "agent": False},
         # The Vast listing terms saved just before the tool unlisted it.
         "saved_listing": None,
         "reclaim_sent_at": None,
@@ -40,8 +43,7 @@ def _clean(saved):
     if saved.get("mode") in MODES:
         st["mode"] = saved["mode"]
     took = saved.get("took_off") or {}
-    st["took_off"] = {"vast": bool(took.get("vast")),
-                      "paralon": bool(took.get("paralon"))}
+    st["took_off"] = {k: bool(took.get(k)) for k in ("vast", "paralon", "agent")}
     if isinstance(saved.get("saved_listing"), dict) and saved["saved_listing"]:
         st["saved_listing"] = dict(saved["saved_listing"])
     if isinstance(saved.get("reclaim_sent_at"), (int, float)):

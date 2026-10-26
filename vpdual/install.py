@@ -17,6 +17,7 @@ import sys
 
 from .config import (DEFAULT_CONFIG, POLICIES, POLICY_HELP, ConfigError,
                      config_path, parse_config)
+from .agent import AgentError, DockerHost, agent_of, valid_target
 from .paralon import ParalonClient, ParalonError
 from .state import MODES, StateStore
 from .vast import VastCLI, VastError
@@ -167,6 +168,35 @@ def _ask_price(ask, out, prompt):
             out("  type a number like 0.40, or press Enter")
 
 
+AGENT_PROMPT = ("  Docker on this machine, to stop the Paralon agent while Vast "
+                "rents it:\n  'local' (this tool runs on it), user@host (ssh "
+                "key login, user in the docker group), Enter = skip: ")
+
+
+def _ask_agent(ask, out):
+    while True:
+        ans = ask(AGENT_PROMPT).strip()
+        if not ans or valid_target(ans):
+            return ans
+        out("  type local, user@host, or press Enter")
+
+
+def check_agent(target, docker, out, vid):
+    """One read of Docker on the machine; says what it found. Never fails
+    init: the service retries every pass."""
+    try:
+        agent = agent_of(docker(target).containers())
+    except (AgentError, ValueError) as exc:
+        out(f"WARNING: machine {vid}: cannot read Docker via {target}: {exc}")
+        return
+    if agent is None:
+        out(f"WARNING: machine {vid}: no Paralon agent container found via "
+            f"{target} (install it from the Paralon dashboard)")
+    else:
+        out(f"machine {vid}: Paralon agent found via {target} "
+            f"({'running' if agent.running else 'stopped'})")
+
+
 # -- writing ---------------------------------------------------------------
 def _write_private(path, text, mode=0o600):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -179,7 +209,7 @@ def _write_private(path, text, mode=0o600):
 
 
 def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
-             vast=None, paralon=None):
+             vast=None, paralon=None, docker=DockerHost):
     """Returns an exit code. `vast` / `paralon` are injectable for tests."""
     env = os.environ if env is None else env
     cfg_path = config_path(args.config)
@@ -223,6 +253,15 @@ def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
             pairs = _ask_pairs(vms, nodes, ask, out)
         if not pairs:
             raise InitError("no machine paired; nothing written")
+        agents = {}
+        for item in args.agent or []:
+            vid, sep, target = item.partition("=")
+            if not sep or not vid.strip().isdigit() or not valid_target(target.strip()):
+                raise InitError(f"--agent {item!r}: use VAST_ID=local or "
+                                "VAST_ID=user@host")
+            if int(vid) not in dict(pairs):
+                raise InitError(f"--agent {item!r}: machine {vid} is not paired")
+            agents[int(vid)] = target.strip()
 
         raw = {"on_paralon_rental": policy, "vastai_bin": vastai_bin,
                "machines": []}
@@ -252,6 +291,15 @@ def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
                     if gpu is not None and bid is not None:
                         entry["vast_listing"] = {"price_gpu": gpu,
                                                  "price_min_bid": bid}
+            if vid not in agents and interactive and not args.agent:
+                agents[vid] = _ask_agent(ask, out)
+            if agents.get(vid):
+                entry["paralon_agent"] = agents[vid]
+                check_agent(agents[vid], docker, out, vid)
+            else:
+                out(f"NOTE: machine {vid}: the Paralon agent is not managed. "
+                    "It keeps starting inference and benchmarks beside Vast "
+                    "renters; add \"paralon_agent\" to the config to stop it.")
             raw["machines"].append(entry)
 
         cfg = parse_config(raw, env)         # validate before writing
@@ -297,6 +345,10 @@ def add_init_args(p):
     p.add_argument("--pair", action="append", metavar="VAST_ID=NODE_ID",
                    help="pair a Vast machine with a Paralon node (repeat for "
                         "more). With --policy, init asks nothing.")
+    p.add_argument("--agent", action="append", metavar="VAST_ID=TARGET",
+                   help="how to reach Docker on that machine to stop the "
+                        "Paralon agent during Vast rentals: local or "
+                        "user@host (repeat per machine)")
     p.add_argument("--price-gpu", type=float, dest="price_gpu",
                    help="fallback $/GPU/h, used only if no saved price")
     p.add_argument("--price-min-bid", type=float, dest="price_min_bid",

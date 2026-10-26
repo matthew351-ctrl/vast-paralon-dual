@@ -321,7 +321,7 @@ class Modes(Base):
         self.assertTrue(p.available)
         c.poll()                      # confirming read clears the flags
         self.assertEqual(self.mstate()["took_off"],
-                         {"vast": False, "paralon": False})
+                         {"vast": False, "paralon": False, "agent": False})
         self.assertEqual(v.writes[-1][2]["price_gpu"], 0.45)  # its own price
 
     def test_mode_is_persisted(self):
