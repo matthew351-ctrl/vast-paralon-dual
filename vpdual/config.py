@@ -80,6 +80,7 @@ class Config:
     docker_events: bool = True     # act on container starts at once
     gpu_free_mib: int = 500         # "GPU free" = no compute process and <= this
     fast_poll_s: int = 5            # pass interval while a machine is recovering
+    jupyter_refresh_s: int = 3600   # pull Paralon's Jupyter image this often while the agent is stopped
     idle_job_images: list = field(default_factory=list)   # the host's own idle job
     paralon_api_key: str = field(default="", repr=False)  # never printed
 
@@ -184,7 +185,7 @@ def parse_config(raw, env=None):
     kwargs = {k: raw[k] for k in known if k in raw}
     for key in ("poll_interval_s", "paralon_min_get_interval_s",
                 "paralon_max_calls_per_min", "reclaim_retry_s", "gpu_free_mib",
-                "fast_poll_s"):
+                "fast_poll_s", "jupyter_refresh_s"):
         if key in kwargs and (isinstance(kwargs[key], bool)
                               or not isinstance(kwargs[key], int)
                               or kwargs[key] < 1):

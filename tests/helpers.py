@@ -158,6 +158,10 @@ class FakeDocker:
     def get(self, cid):
         return next(c for c in self.containers_ if c.id == cid)
 
+    def refresh_jupyter(self):
+        self.refreshes = getattr(self, "refreshes", 0) + 1
+        return "sha256:9985fd570a8f"
+
     def pin_jupyter(self):
         self.pins += 1
         if self.fail_pin:

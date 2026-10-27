@@ -336,6 +336,10 @@ restart.
   because it renames its own container when it updates. Each pass also runs
   one short shell command for the Jupyter pin: `docker image inspect`, then
   `docker create` only if the pin is missing, and `docker rm` of older pins.
+  While the agent is stopped, once every `jupyter_refresh_s` (default 3600) a
+  low-priority `docker pull -q ghcr.io/paraloncloud/jupyter:latest` on a
+  background thread keeps the image current, so a node is not left "digest not
+  approved" when Paralon publishes a new image during a Vast rental.
 - Vast (`vastai` CLI, checked against version 1.3.0):
   `vastai show machines --raw`, `vastai list machine <id> --price_gpu ...
   --price_min_bid ... --price_disk ... --price_inetu ... --price_inetd ...

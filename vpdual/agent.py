@@ -61,6 +61,17 @@ PIN_SCRIPT = (
     f"for o in $(docker ps -a --filter label={PIN_LABEL} --format '{{{{.Names}}}}'); do "
     "[ \"$o\" = \"$n\" ] || { docker rm \"$o\" >/dev/null && echo \"removed $o\"; }; done"
 )
+# JUPYTER REFRESH (v0.4.6): while the agent is stopped (a Vast rental), nothing
+# pulls a NEW Jupyter image, and Paralon then reports the node "jupyter present
+# but digest not approved" -- unrentable until the agent pulls ~9 GB after the
+# renter leaves. A low-priority pull keeps it current; the pin pass pins it.
+# A pull of an unchanged image is a registry manifest check only.
+REFRESH_SCRIPT = (
+    f"if command -v ionice >/dev/null; then io='ionice -c3'; else io=''; fi; "
+    f"$io nice -n 19 docker pull -q {JUPYTER_IMAGE} >/dev/null && "
+    f"docker image inspect -f '{{{{.Id}}}}' {JUPYTER_IMAGE}"
+)
+REFRESH_TIMEOUT_S = 900
 PS_FORMAT = "{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.State}}\t{{.Label \"%s\"}}" % TYPE_LABEL
 # Vast names every rental's container C.<contract id> (Docker and VM rentals).
 VAST_NAME_RE = re.compile(r"^C\.\d+$")
@@ -218,6 +229,20 @@ class DockerHost:
         'kept <id>' or 'pinned <id>', then any 'removed <old pin>'."""
         return [ln.strip() for ln in self._exec(self._remote(PIN_SCRIPT),
                                                "jupyter pin").splitlines() if ln.strip()]
+
+    def refresh_jupyter(self):
+        """Pull Paralon's Jupyter image at low priority. Returns its image id
+        afterwards. Slow when the image changed (~9 GB): run off the pass."""
+        try:
+            res = self._run(self._remote(REFRESH_SCRIPT), capture_output=True,
+                            text=True, timeout=REFRESH_TIMEOUT_S)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise AgentError(f"{self.target}: {exc}") from exc
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout or "").strip().splitlines()
+            raise AgentError(f"{self.target}: jupyter refresh exited "
+                             f"{res.returncode}: {err[-1] if err else 'no output'}")
+        return res.stdout.strip()
 
     def containers(self):
         return parse_ps(self._docker("ps", "-a", "--no-trunc", "--format", PS_FORMAT))

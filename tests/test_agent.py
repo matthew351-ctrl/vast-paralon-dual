@@ -299,5 +299,50 @@ class ConfigKey(unittest.TestCase):
         self.assertEqual(cfg.machines[0].paralon_agent, "")
 
 
+class JupyterRefresh(Base):
+    """v0.4.6: while the agent is stopped, Paralon's Jupyter image is pulled
+    once every jupyter_refresh_s off the pass, so a new image published during
+    a Vast rental does not leave the node "digest not approved"."""
+
+    def _ctl(self, d, now):
+        cfg = make_config(self.state_path, agent="user@gpu1")
+        c = Controller(cfg, FakeVast(), FakeParalon(), self.store,
+                       clock=lambda: now[0], docker=d)
+        return c, cfg.machines[0]
+
+    def _wait(self, c, m):
+        _last, t = c._jupyter_refresh.get(m.vast_machine_id, (None, None))
+        if t is not None:
+            t.join(5)
+
+    def test_agent_running_pulls_nothing(self):
+        d, now = FakeDocker(agent_running=True), [1000.0]
+        c, m = self._ctl(d, now)
+        for _ in range(3):
+            c._refresh_jupyter(m, d.machine_state())
+            now[0] += 4000
+        self.assertEqual(getattr(d, "refreshes", 0), 0)
+
+    def test_stopped_agent_pulls_after_a_settle_then_hourly(self):
+        d, now = FakeDocker(agent_running=False), [1000.0]
+        c, m = self._ctl(d, now)
+        c._refresh_jupyter(m, d.machine_state())          # first sight: arms only
+        self.assertEqual(getattr(d, "refreshes", 0), 0)
+        now[0] += 299
+        c._refresh_jupyter(m, d.machine_state())
+        self.assertEqual(getattr(d, "refreshes", 0), 0, "a Vast hand-over settles first")
+        now[0] += 2
+        c._refresh_jupyter(m, d.machine_state())
+        self._wait(c, m)
+        self.assertEqual(d.refreshes, 1)
+        now[0] += 1800
+        c._refresh_jupyter(m, d.machine_state())
+        self.assertEqual(d.refreshes, 1, "not again inside jupyter_refresh_s")
+        now[0] += 1801
+        c._refresh_jupyter(m, d.machine_state())
+        self._wait(c, m)
+        self.assertEqual(d.refreshes, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

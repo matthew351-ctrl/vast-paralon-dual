@@ -51,6 +51,7 @@ neither has a GPU price and min bid, the relist holds.
 
 import fcntl
 import logging
+import threading
 import os
 import time
 from contextlib import contextmanager
@@ -128,6 +129,7 @@ class Controller:
         self.recovering = set()       # machine ids waiting on GPU / agent / node
         self._last_forced_nodes = 0.0
         self.burst_until = 0.0
+        self._jupyter_refresh = {}    # machine id -> (last start, running thread)
 
     # -- bookkeeping ---------------------------------------------------
     @property
@@ -343,6 +345,7 @@ class Controller:
         if m.paralon_agent:
             ok = self._agent(m, vast_renter, node, machine) and ok
             self._pin_jupyter(m)
+            self._refresh_jupyter(m, machine)
         self._track_recovery(m, vast_renter, node)
         return ok
 
@@ -433,6 +436,41 @@ class Controller:
         changed = [ln for ln in lines if ln.startswith(("pinned", "removed"))]
         if changed:
             self._decide(m, "Paralon's Jupyter image: " + "; ".join(changed))
+
+    def _refresh_jupyter(self, m, machine):
+        """While the agent is stopped, pull Paralon's Jupyter image once every
+        jupyter_refresh_s on a background thread (a changed image is ~9 GB;
+        the pass never waits for it). The next pass's pin keeps it."""
+        if self.dry_run or machine is None:
+            return
+        agent = agent_of(machine.containers)
+        if agent is not None and agent.running:
+            return                    # the agent pulls its own image
+        last, thread = self._jupyter_refresh.get(m.vast_machine_id, (None, None))
+        if thread is not None and thread.is_alive():
+            return
+        now = self.clock()
+        if last is None:
+            # first sight of a stopped agent: wait a few minutes so a Vast
+            # hand-over settles before any pull
+            self._jupyter_refresh[m.vast_machine_id] = (now - self.cfg.jupyter_refresh_s + 300, None)
+            return
+        if now - last < self.cfg.jupyter_refresh_s:
+            return
+        host = self.docker(m.paralon_agent)
+
+        def pull():
+            try:
+                image_id = host.refresh_jupyter()
+                log.info("machine %s: Paralon's Jupyter image checked (%s)",
+                         m.vast_machine_id, image_id[:19])
+            except AgentError as exc:
+                log.warning("machine %s: Jupyter refresh failed, retried later: %s",
+                            m.vast_machine_id, exc)
+
+        t = threading.Thread(target=pull, name=f"jupyter-{m.vast_machine_id}", daemon=True)
+        self._jupyter_refresh[m.vast_machine_id] = (now, t)
+        t.start()
 
     def _agent(self, m, vast_renter, node, machine=None):
         """Rule 1, agent half: the Paralon agent is off while Vast rents."""
