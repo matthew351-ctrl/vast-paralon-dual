@@ -211,7 +211,8 @@ read holds on its own.
    - `unlist_vast` (the default): Vast is unlisted until the Paralon rental
      ends, so Vast cannot start a renter on the same GPU.
    - `keep_vast_listed`: Vast stays listed. Paralon is interruptible fill; a
-     Vast booking triggers rule 1.
+     Vast booking triggers rule 1, and the Vast renter waits for the spot
+     reclaim (Paralon gives its renter 2 minutes' notice).
 3. **Rental ended**: the tool relists only what it took off itself, and
    starts the Paralon agent only if it stopped it. After a Vast rental the
    machine is **recovering**: passes run every `fast_poll_s` (5 s) until the
@@ -347,12 +348,6 @@ restart.
 
 ## Known limits
 
-- When Vast rents during a Paralon spot rental, a Vast **Docker** renter can
-  share the GPU for up to about 2 minutes, until the reclaim lands.
-- A Vast **VM** start is refused while the GPU is busy and retried by Vast's
-  daemon; we observed it starting about 2.5 minutes late. With
-  `docker_events` the node is paused within seconds of the VM's container
-  starting.
 - On a Vast host, the Paralon agent needs **Docker 29.2 or newer** to see the
   GPU. Upgrade using Vast's own host instructions; this tool does not.
 - Since 2026-10-26 Paralon runs no inference or render jobs on **spot**
