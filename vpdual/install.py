@@ -15,7 +15,7 @@ import shlex
 import shutil
 import sys
 
-from .config import (DEFAULT_CONFIG, POLICIES, POLICY_HELP, ConfigError,
+from .config import (DEFAULT_CONFIG, DEFAULT_POLICY, POLICIES, POLICY_HELP, ConfigError,
                      config_path, parse_config)
 from .agent import AgentError, DockerHost, agent_of, valid_target
 from .paralon import ParalonClient, ParalonError
@@ -116,9 +116,13 @@ def read_paralon(paralon):
 def _ask_policy(ask, out):
     out("\nWhile a Paralon renter is on a machine, what should Vast do?")
     for i, p in enumerate(POLICIES, 1):
-        out(f"  {i}) {p:<16} {POLICY_HELP[p]}")
+        tag = " (default)" if p == DEFAULT_POLICY else ""
+        out(f"  {i}) {p:<16} {POLICY_HELP[p]}{tag}")
+    first = POLICIES.index(DEFAULT_POLICY) + 1
     while True:
-        ans = ask("Choose 1 or 2: ").strip()
+        ans = ask(f"Choose 1 or 2 [{first}]: ").strip()
+        if not ans:                      # Enter takes the default (v0.4.8)
+            return DEFAULT_POLICY
         if ans in ("1", "2"):
             return POLICIES[int(ans) - 1]
         if ans in POLICIES:

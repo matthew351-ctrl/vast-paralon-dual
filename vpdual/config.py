@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .agent import valid_target
 
-POLICIES = ("keep_vast_listed", "unlist_vast")
+POLICIES = ("unlist_vast", "keep_vast_listed")   # the default first: init offers it as 1 (v0.4.8)
 DEFAULT_POLICY = "unlist_vast"   # Vast cannot start a renter on a Paralon-rented GPU
 POLICY_HELP = {
     "keep_vast_listed": "Vast stays listed while Paralon is rented; a Vast "

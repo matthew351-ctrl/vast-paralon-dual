@@ -85,7 +85,7 @@ class Init(TempDirMixin, unittest.TestCase):
 
     def test_interactive_writes_a_valid_config(self):
         node = fixture("fixture_paralon_nodes.json")["nodes"][0]["id"]
-        ask = Answers("2", "1", "")       # unlist_vast; 12345 -> node 1; agent skip
+        ask = Answers("", "1", "")        # Enter = unlist_vast (default); 12345 -> node 1; agent skip
         args = init_args(self.cfg_path)
         code = self.run_init(args, ask=ask)
         self.assertEqual(code, 0, self.out)
@@ -98,6 +98,21 @@ class Init(TempDirMixin, unittest.TestCase):
         self.assertIn("status", text)
         self.assertIn("systemctl enable --now vast-paralon-dual", text)
         self.assertNotIn(KEY, text)
+
+    def test_interactive_policy_default_comes_first(self):
+        # v0.4.8: unlist_vast is offered as 1, marked (default), and Enter takes it;
+        # 2 picks keep_vast_listed
+        for answer, want in (("", "unlist_vast"), ("1", "unlist_vast"),
+                             ("2", "keep_vast_listed")):
+            self.out = []
+            ask = Answers(answer, "1", "")
+            self.assertEqual(self.run_init(init_args(self.cfg_path, "--force"), ask=ask), 0,
+                             self.out)
+            self.assertEqual(self.loaded().on_paralon_rental, want)
+            menu = "\n".join(self.out)
+            self.assertIn("1) unlist_vast", menu)
+            self.assertIn("(default)", menu.split("2) keep_vast_listed")[0])
+            self.assertIn("[1]", ask.prompts[0])
 
     def test_env_file_and_mode(self):
         args = init_args(self.cfg_path, "--policy", "keep_vast_listed",
