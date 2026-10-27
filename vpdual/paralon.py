@@ -7,7 +7,7 @@ Endpoints used:
 
 Be gentle with the API: GET /nodes is served from a cache for
 `min_get_interval_s` (120 s by default), all calls share a sliding window of
-`max_calls_per_min` (4 by default), and every HTTP error and network error
+`max_calls_per_min` (6 by default), and every HTTP error and network error
 starts an exponential back-off during which no call is made.
 """
 
@@ -97,7 +97,7 @@ class ParalonNode:
 
 class ParalonClient:
     def __init__(self, base_url, api_key, *, min_get_interval_s=120,
-                 max_calls_per_min=4, opener=None, clock=time.monotonic,
+                 max_calls_per_min=6, opener=None, clock=time.monotonic,
                  sleep=time.sleep, timeout=20):
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key

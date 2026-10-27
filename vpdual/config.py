@@ -74,7 +74,7 @@ class Config:
     poll_interval_s: int = 60
     paralon_base_url: str = "https://paraloncloud.com/api/v1"
     paralon_min_get_interval_s: int = 120
-    paralon_max_calls_per_min: int = 4
+    paralon_max_calls_per_min: int = 6   # 4 until v0.4.7: a 30 s burst read left a write no room in its minute
     reclaim_retry_s: int = 300
     vastai_bin: str = "vastai"
     docker_events: bool = True     # act on container starts at once

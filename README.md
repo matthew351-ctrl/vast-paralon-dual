@@ -276,7 +276,7 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | `state_file` | default `~/.local/state/vast-paralon-dual/state.json` |
 | `poll_interval_s` | seconds between passes (default 60) |
 | `paralon_min_get_interval_s` | minimum seconds between `GET /nodes` while nothing is happening (default 120; once a minute while recovering or rented) |
-| `paralon_max_calls_per_min` | hard cap on Paralon calls (default 4) |
+| `paralon_max_calls_per_min` | hard cap on Paralon calls (default 6; 4 before v0.4.7, when a 30 s burst read could fill the minute and hold a write back by a minute or more) |
 | `reclaim_retry_s` | do not repeat a reclaim sooner than this (default 300) |
 | `vastai_bin` | path to `vastai` (`init` writes the full path) |
 | `docker_events` | follow `docker events` on each machine with `paralon_agent` and pause Paralon the moment a non-Paralon container starts (default `true`) |

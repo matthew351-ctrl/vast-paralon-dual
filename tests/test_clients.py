@@ -91,7 +91,7 @@ class ParalonClientTests(unittest.TestCase):
         c.set_available("node-1", False)
         self.assertFalse(c.get_node("node-1").available)
 
-    def test_never_more_than_four_calls_a_minute(self):
+    def test_never_more_than_the_cap_in_a_minute(self):
         http, clock = FakeHTTP([node()]), Clock()
         times = []
 
@@ -106,14 +106,16 @@ class ParalonClientTests(unittest.TestCase):
             except ParalonError:
                 pass
             clock.t += 7
-        self.assertGreater(len(times), 8)
-        for i in range(len(times) - 4):
-            self.assertGreaterEqual(times[i + 4] - times[i], 60)
+        n = c.max_calls_per_min
+        self.assertEqual(n, 6)          # the default since v0.4.7 (was 4)
+        self.assertGreater(len(times), 2 * n)
+        for i in range(len(times) - n):
+            self.assertGreaterEqual(times[i + n] - times[i], 60)
 
     def test_refuses_rather_than_waiting_long(self):
         http, clock = FakeHTTP([node()]), Clock()
         c = paralon(http, clock)
-        for _ in range(4):
+        for _ in range(c.max_calls_per_min):
             c.set_available("node-1", True)
         clock.t = 5   # the next free slot is 55 s away
         with self.assertRaisesRegex(ParalonError, "rate limit"):
