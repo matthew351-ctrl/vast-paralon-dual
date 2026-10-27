@@ -2,7 +2,7 @@
 
 New format (one or more machines):
 
-    {"on_paralon_rental": "keep_vast_listed",
+    {"on_paralon_rental": "unlist_vast",
      "machines": [{"vast_machine_id": 123, "paralon_node_id": "abc"}]}
 
 The old single-machine keys (`vast_machine_id` + `paralon_node_id` at the top

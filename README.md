@@ -122,7 +122,7 @@ reclaimed when a Vast renter arrives.
 For scripted installs, pass everything and it asks nothing:
 
 ```sh
-python3 vast_paralon_dual.py init --policy keep_vast_listed \
+python3 vast_paralon_dual.py init --policy unlist_vast \
     --pair 12345=NODE_ID --pair 12346=OTHER_NODE_ID \
     --agent 12345=local --agent 12346=you@gpu-machine-2 [--force]
 ```
@@ -256,7 +256,7 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 
 ```json
 {
-  "on_paralon_rental": "keep_vast_listed",
+  "on_paralon_rental": "unlist_vast",
   "machines": [
     {"vast_machine_id": 12345, "paralon_node_id": "node-id",
      "paralon_agent": "local"},
