@@ -54,7 +54,8 @@ def cmd_run(ctl, cfg):
         targets = sorted({m.paralon_agent for m in cfg.machines if m.paralon_agent})
         for t in targets:
             start_watcher(wake, target=t,
-                          on_start=lambda name, image, t=t: ctl.container_started(t, name, image))
+                          on_start=lambda name, image, ptype="", t=t:
+                          ctl.container_started(t, name, image, ptype))
         if not targets:
             start_watcher(wake)      # no machine reachable: wake-only, local
     for m in cfg.machines:
@@ -111,7 +112,9 @@ def cmd_status(ctl, cfg, machine_id, out=print):
         out(f"  mode: {st['mode'] or '(not set: run `mode dual`)'}")
         out(f"  took off (owed): vast={st['took_off']['vast']} "
             f"paralon={st['took_off']['paralon']} "
-            f"agent stopped={st['took_off']['agent']}")
+            f"agent stopped={st['took_off']['agent']}"
+            + (f" idle job stopped={', '.join(str(j.get('name') or j['id']) for j in st['idle_job'])}"
+               if st.get("idle_job") else ""))
         if m.paralon_agent:
             try:
                 agent = agent_of(ctl.docker(m.paralon_agent).containers())
@@ -123,8 +126,11 @@ def cmd_status(ctl, cfg, machine_id, out=print):
             try:
                 ms = ctl.docker(m.paralon_agent).machine_state()
                 vast_on = ms.vast_running(cfg.idle_job_images)
+                rentals = ms.paralon_rentals()
                 out("  machine: Vast containers running: "
                     + (", ".join(vast_on) if vast_on else "none")
+                    + "; Paralon rental containers: "
+                    + (", ".join(rentals) if rentals else "none")
                     + f"; {ms.gpu_text()}")
             except (AgentError, ValueError) as exc:
                 out(f"  machine: unreadable ({exc})")

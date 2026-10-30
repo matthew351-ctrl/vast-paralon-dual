@@ -5,9 +5,21 @@ Only these commands are used (checked against vastai CLI 1.3.0 --help):
   vastai list machine <id> --price_gpu X --price_min_bid Y --price_disk Z
       --price_inetu U --price_inetd D --end_date E [...]
   vastai unlist machine <id>
+  vastai show instances --raw              (only with idle_job_images, v0.5.0)
+  vastai stop instance <id> / vastai start instance <id>
+      -- ONLY the host's own default job (its idle job), never a renter's
 
 This module never touches the Vast daemon, its packages or its containers.
 Unlisting does not evict a running renter; it only stops new bookings.
+
+The host's default job is an instance on the host's own client account, so
+`show instances --raw` lists it. The fields relied on (vastai 1.3.0, the v1
+instances endpoint's full rows): `id`, `machine_id`, `image_uuid` (the image,
+matched against idle_job_images), `intended_status` ("running" or "stopped":
+what Vast will keep the instance at) and `actual_status` (shown only).
+`vastai stop|start instance` exit 0 whatever the server says and print
+"stopping instance <id>." / "starting instance <id>." only on success, so that
+text is the check; the engine also confirms on a later read.
 """
 
 import json
@@ -169,6 +181,32 @@ class VastCLI:
                 continue
             args += [flag, _arg(key, val)]
         return args
+
+    def read_instances(self):
+        """ONE `show instances --raw` call -> list of instance dicts (the
+        host's own client account; its default jobs are among them)."""
+        out = self._call(["show", "instances", "--raw"])
+        try:
+            data = json.loads(out)
+        except ValueError:
+            raise VastError("`vastai show instances --raw` returned non-JSON")
+        if isinstance(data, dict):
+            data = data.get("instances")
+        if not isinstance(data, list):
+            raise VastError("`vastai show instances --raw`: no instance list")
+        return [i for i in data if isinstance(i, dict) and i.get("id") is not None]
+
+    def stop_instance(self, instance_id):
+        self._instance_state("stop", "stopping", instance_id)
+
+    def start_instance(self, instance_id):
+        self._instance_state("start", "starting", instance_id)
+
+    def _instance_state(self, verb, word, instance_id):
+        out = self._call([verb, "instance", str(int(instance_id))])
+        if f"{word} instance {int(instance_id)}" not in out.lower():
+            first = out.strip().splitlines()[0] if out.strip() else "no reply"
+            raise VastError(f"vastai {verb} instance {instance_id} refused: {first}")
 
     def list_machine(self, machine_id, listing):
         out = self._call(self.list_args(machine_id, listing) + ["--raw"])

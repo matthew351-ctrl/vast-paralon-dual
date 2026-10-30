@@ -17,6 +17,10 @@ group). Only these commands are run:
 Only Paralon's containers are ever stopped or started: the agent (found by its
 image, because it renames its own container when it updates) and the
 containers it started. Never a Vast container, and never a Paralon rental.
+The one exception is the host's OWN idle job (`idle_job_images`) when it is a
+plain Docker container (not a Vast C.<id> instance): it is stopped while a
+Paralon rental runs and started again after (v0.5.0). A Vast default job is
+stopped and started through Vast instead (vast.py), never through Docker.
 
 It also reads the machine itself (`machine_state`): which containers run,
 and whether the GPU is free (nvidia-smi: compute processes and memory in use).
@@ -111,7 +115,8 @@ class Container:
     @property
     def is_paralon(self):
         return (self.image.lower().startswith(PARALON_IMAGE_PREFIX)
-                or self.name.lower().startswith(PARALON_NAME_PREFIX))
+                or self.name.lower().startswith(PARALON_NAME_PREFIX)
+                or bool(self.paralon_type))
 
 
 @dataclass
@@ -132,6 +137,15 @@ class MachineState:
 
     def idle_job_running(self, idle_images=()):
         return any(c.running and self._idle(c, idle_images) for c in self.containers)
+
+    def idle_jobs(self, idle_images=()):
+        """The host's own idle job containers running now (`idle_job_images`)."""
+        return [c for c in self.containers if c.running and self._idle(c, idle_images)]
+
+    def paralon_rentals(self):
+        """Names of running Paralon RENTAL containers (label paralon.type=rental,
+        which Paralon puts on a tenant's container and on nothing else)."""
+        return [c.name for c in self.containers if c.running and c.paralon_type == RENTAL]
 
     def gpu_free(self, limit_mib, idle_images=()):
         """True: no compute process and memory near 0 (or only the host's idle
@@ -163,6 +177,13 @@ def parse_machine(text):
     return MachineState(parse_ps(ps), procs, mem)
 
 
+def label_value(text):
+    """A label rendered by a Docker template: a missing one can read
+    `<no value>` (Go's template for a nil map entry), which is no label."""
+    text = (text or "").strip()
+    return "" if text == "<no value>" else text
+
+
 def parse_ps(text):
     out = []
     for line in text.splitlines():
@@ -172,8 +193,8 @@ def parse_ps(text):
         out.append(Container(id=parts[0].strip(), image=parts[1].strip(),
                              name=parts[2].strip(),
                              running=parts[3].strip().lower() == "running",
-                             paralon_type=(parts[4].strip() if len(parts) > 4
-                                           else "")))
+                             paralon_type=label_value(parts[4] if len(parts) > 4
+                                                      else "")))
     return out
 
 
@@ -188,7 +209,8 @@ def leftovers(containers):
     """Running Paralon containers other than the agent and a rental: its
     inference workers, model downloads, benchmarks."""
     return [c for c in containers if c.running and c.is_paralon
-            and not c.is_agent and c.paralon_type != RENTAL]
+            and not c.is_agent and c.paralon_type != RENTAL
+            and not VAST_NAME_RE.match(c.name)]      # never a Vast container
 
 
 class DockerHost:

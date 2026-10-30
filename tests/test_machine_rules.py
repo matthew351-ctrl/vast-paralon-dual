@@ -121,10 +121,12 @@ class OnDemandWithAStoppedVastInstance(Base):
             self.ctl(FakeVast(running=0, resident=1), p, d).poll()
         self.assertIn(OFF, p.writes)
 
-    def test_spot_node_stays_listed(self):
+    def test_spot_node_paused_too_since_v050(self):
+        # v0.4.x left a spot node listed here; a resume beside a spot rental
+        # shared the GPU for the 2-minute reclaim (2026-10-30).
         p = FakeParalon(available=True, spot=True)
         self.ctl(FakeVast(running=0, resident=1), p, FakeDocker()).poll()
-        self.assertEqual(p.writes, [])
+        self.assertEqual(p.writes, [OFF])
 
 
 class Rule2DockerEventsActAtOnce(Base):
@@ -160,13 +162,17 @@ class Rule2DockerEventsActAtOnce(Base):
         class Proc:
             def __init__(self):
                 import io
-                self.stdout = io.StringIO("C.123\tpytorch/pytorch:2\n")
+                self.stdout = io.StringIO("C.123\tpytorch/pytorch:2\t\n"
+                                          "jupyter-9\tghcr.io/paraloncloud/jupyter:latest\trental\n"
+                                          "x\timg\t<no value>\n")
 
         t = start_watcher(wake, popen=lambda cmd, **kw: Proc(), sleep=lambda s: None,
                           retries=0, target="me@gpu1",
-                          on_start=lambda n, i: seen.append((n, i)))
+                          on_start=lambda n, i, t: seen.append((n, i, t)))
         t.join(5)
-        self.assertEqual(seen, [("C.123", "pytorch/pytorch:2")])
+        self.assertEqual(seen, [("C.123", "pytorch/pytorch:2", ""),
+                                ("jupyter-9", "ghcr.io/paraloncloud/jupyter:latest", "rental"),
+                                ("x", "img", "")])
         self.assertTrue(wake.is_set())
 
     def test_remote_events_go_over_ssh_batch_mode(self):

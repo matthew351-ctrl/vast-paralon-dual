@@ -37,6 +37,36 @@ class FakeVast:
         self.fail_write = False
         self.reads = 0
         self.writes = []
+        # `show instances --raw` rows (the host's own account: its default jobs)
+        self.instances = []
+        self.fail_instances = False
+        self.instance_reads = 0
+
+    def add_job(self, iid, machine_id=111, image="me/miner:1", status="running"):
+        self.instances.append({"id": iid, "machine_id": machine_id,
+                               "image_uuid": image, "intended_status": status,
+                               "actual_status": status})
+        return self
+
+    def read_instances(self):
+        self.instance_reads += 1
+        if self.fail_instances:
+            raise VastError("show instances failed")
+        return [dict(i) for i in self.instances]
+
+    def _set_instance(self, verb, iid, status):
+        self.writes.append((verb, iid))
+        if self.fail_write:
+            raise VastError(f"{verb} failed")
+        for i in self.instances:
+            if i["id"] == iid:
+                i["intended_status"] = status
+
+    def stop_instance(self, iid):
+        self._set_instance("stop_instance", iid, "stopped")
+
+    def start_instance(self, iid):
+        self._set_instance("start_instance", iid, "running")
 
     def add(self, mid, listed=True, running=0, resident=0, terms=None):
         self.machines[mid] = {

@@ -5,8 +5,17 @@ or switch each one fully to one of them. A Vast renter always wins the GPU.
 
 Python 3 standard library only, plus Vast's official `vastai` CLI. It never
 touches the Vast daemon, its packages or its containers. On each GPU machine
-it stops and starts only Paralon's agent and the containers that agent
-started.
+it stops and starts only Paralon's agent, the containers that agent started,
+and your own idle job if you name one (`idle_job_images`).
+
+**Set `paralon_agent` for every machine.** It is how the tool runs `docker`
+on the machine (`local`, or `user@host` over ssh), and the protections need
+it: seeing a renter from the machine's own containers, acting on
+`docker events` within seconds, stopping Paralon's agent and its leftovers
+during a Vast rental, stopping your idle job during a Paralon rental, and
+waiting for the GPU to be free before handing it to the other side. Without
+it the tool has only Vast's running count and Paralon's API, read on a 60 s
+pass.
 
 **While Vast rents a machine, its Paralon agent is switched off.** A paused
 Paralon node's agent keeps starting inference workers, model downloads and
@@ -33,11 +42,15 @@ needs, first:
    in the Paralon dashboard, set it to **spot**, and run the agent install
    command it gives you on the machine. Check the dashboard shows the node
    online and verified.
-3. **A way for this tool to run `docker` on that machine**, to switch the
-   Paralon agent off during Vast rentals: run the tool on the machine itself
-   (your user in the `docker` group), or give it an ssh key login there to a
-   user in the `docker` group. Without it everything else works, but the
-   agent keeps running beside Vast renters.
+3. **A way for this tool to run `docker` on that machine** (`paralon_agent`
+   in the config; **required for the protections**): run the tool on the
+   machine itself (your user in the `docker` group), or give it an ssh key
+   login there to a user in the `docker` group. Without it the tool still
+   switches listings, but only from Vast's running count and Paralon's API
+   on a 60 s pass: no renter seen from the machine's containers, no
+   `docker events`, the Paralon agent and its leftovers keep running beside
+   Vast renters, your idle job keeps running beside Paralon renters, and
+   nothing waits for the GPU to be free before the other side is listed.
 4. **Docker 29.2 or newer** on the machine. On a Vast host the NVIDIA runtime is
    in CDI mode, and older Docker cannot give the Paralon agent the GPU. Upgrade
    Docker following Vast's own host instructions.
@@ -175,7 +188,12 @@ tool follows `docker events` on each machine (locally or over the ssh link).
 When a non-Paralon container starts -- anything but Paralon's own containers,
 this tool's pin and your `idle_job_images` -- every available Paralon node on
 that machine is paused immediately, and a full pass follows within seconds
-(it stops the agent and reads Vast).
+(it stops the agent and reads Vast). When a **Paralon rental** container
+starts (Paralon labels a tenant's container `paralon.type=rental`; its agent,
+benchmarks and inference workers are not rentals), the tool at once unlists
+Vast (dual mode with `unlist_vast`, unless a Vast renter already runs) and
+stops your idle job, instead of waiting up to a minute for the API to show
+the rental.
 
 Each pass (every 60 s by default, every `fast_poll_s` = 5 s while a machine
 is recovering, see rule 3) reads both sides first: one
@@ -203,13 +221,26 @@ read holds on its own.
    new one and removes the old pin. It never pulls: if the image is not on the
    machine yet (the Paralon agent downloads it when it starts), nothing happens
    until it is.
-   An **on-demand** node also stays paused while the Vast machine has a
-   stopped instance that can resume (Vast's resident count above its running
-   count): if it resumed during an on-demand Paralon rental, that rental
-   could not be reclaimed.
-2. **Paralon rented, no Vast renter** (dual mode): per `on_paralon_rental`:
+   **A stored Vast instance keeps Paralon paused**, spot or on-demand (since
+   v0.5.0; before, on-demand only). A renter's stopped instance (Vast's
+   resident count above its running count) can resume at any moment, and
+   unlisting Vast does not stop a resume: beside a spot rental the two would
+   share the GPU for the 2-minute reclaim notice, beside an on-demand rental
+   until one ends. The node stays registered (`available: false`, never
+   deleted) and is made available again once nothing is stored. If Paralon
+   is already rented when an instance is stored, the rental cannot be
+   paused out: the tool warns, keeps the node paused so no new rental
+   follows, and a resume is handled as above (reclaim). Vast does not count
+   your own default job in either count.
+2. **Paralon rented, no Vast renter** (dual mode): per `on_paralon_rental`.
+   "Rented" is the API's `rented` **or** a Paralon rental container running
+   on the machine (the API can lag it by a minute):
    - `unlist_vast` (the default): Vast is unlisted until the Paralon rental
-     ends, so Vast cannot start a renter on the same GPU.
+     ends, so Vast cannot start a renter on the same GPU. With
+     `docker_events` the unlist is sent the moment the rental's container
+     starts, through the same path as a pass (flag and listing terms saved
+     first). If the next passes show no rental after all (the container
+     exited and the API never showed one), Vast is relisted as below.
    - `keep_vast_listed`: Vast stays listed. Paralon is interruptible fill; a
      Vast booking triggers rule 1, and the Vast renter waits for the spot
      reclaim (Paralon gives its renter 2 minutes' notice).
@@ -225,6 +256,43 @@ read holds on its own.
    unlist or pause by hand, or an agent you stop by hand, is left alone. The
    node shows offline on Paralon while its agent is stopped, so it is made
    available again on the pass after the agent reconnects.
+   After a **Paralon** rental (for a machine with `paralon_agent`), Vast is
+   relisted only once no Paralon rental container runs on the machine and
+   the GPU is free (no compute process, at most `gpu_free_mib` in use); until
+   then the pass logs `hold: not relisting Vast yet -- ...` and passes run
+   every `fast_poll_s`. An unreadable machine holds too. The agent's own
+   benchmark or inference worker does not hold it (it may run as long as the
+   agent does, and rule 1 kills it the moment a Vast renter arrives). A
+   machine without `paralon_agent` is relisted as soon as the API shows the
+   rental ended.
+
+### Your idle job
+
+`idle_job_images` names your own idle job (a miner, say): never a renter.
+On a machine with `paralon_agent` it also **never runs under a Paralon
+rental** (since v0.5.0). While a Paralon rental runs (the API, or a rental
+container on the machine) and no Vast renter does, the tool stops it, and
+starts it again once the rental is over -- only what it stopped itself (the
+`idle_job` list in the state file, saved before the stop and cleared only
+when a later read shows the job back).
+
+- **A Vast default job** (a running `C.<id>` container whose image matches):
+  stopped and started through Vast, because Vast's daemon restarts a default
+  job it believes should run. The tool reads `vastai show instances --raw`,
+  takes the instances whose `machine_id` is this machine and whose
+  `image_uuid` starts with an `idle_job_images` prefix, and runs `vastai stop
+  instance <id>` for each whose `intended_status` is `running`. To start it
+  again: `vastai start instance <id>` while its `intended_status` is not
+  `running`; it is back once it reads `running`.
+- **A plain Docker container** you run yourself (any other name):
+  `docker stop` / `docker start` on the machine.
+
+The order after a Paralon rental: once the rental's container is gone and
+the GPU is free, the pass relists Vast first and then starts the idle job.
+The idle job can never hold the relist back: it starts after the relist, and
+a running idle job counts as a free GPU (a Vast renter's arrival stops a
+default job anyway). A relist that is held for another reason (no saved
+price, a failed write) does not hold the idle job.
 
 Switching modes does not end a rental already running on either side.
 
@@ -272,7 +340,7 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | --- | --- |
 | `on_paralon_rental` | `unlist_vast` (default) or `keep_vast_listed` |
 | `machines` | list of `{vast_machine_id, paralon_node_id}`, each with an optional `paralon_agent` and an optional `vast_listing` that overrides the top-level one |
-| `machines[].paralon_agent` | how to run `docker` on that machine to stop the Paralon agent during Vast rentals: `local`, or `user@host` for ssh (key login, `BatchMode`; the user must be in the `docker` group). Leave it out to not manage the agent |
+| `machines[].paralon_agent` | how to run `docker` on that machine: `local`, or `user@host` for ssh (key login, `BatchMode`; the user must be in the `docker` group). **Required for the protections**: renter detection from the machine's own containers, `docker_events`, stopping Paralon's agent and its leftovers during Vast rentals, stopping your idle job during Paralon rentals, and the GPU-free waits before the agent starts and before Vast is relisted. Left out, the tool has only Vast's running count and Paralon's API on a 60 s pass |
 | `vast_listing` | optional fallback listing terms (see Relist prices); keys map to `vastai list machine` flags: `price_gpu`, `price_min_bid`, `price_disk`, `price_inetu`, `price_inetd`, `discount_rate`, `min_chunk`, `end_date` or `duration` (not both), `vol_size`, `vol_price` |
 | `state_file` | default `~/.local/state/vast-paralon-dual/state.json` |
 | `poll_interval_s` | seconds between passes (default 60) |
@@ -280,10 +348,10 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | `paralon_max_calls_per_min` | hard cap on Paralon calls (default 6; 4 before v0.4.7, when a 30 s burst read could fill the minute and hold a write back by a minute or more) |
 | `reclaim_retry_s` | do not repeat a reclaim sooner than this (default 300) |
 | `vastai_bin` | path to `vastai` (`init` writes the full path) |
-| `docker_events` | follow `docker events` on each machine with `paralon_agent` and pause Paralon the moment a non-Paralon container starts (default `true`) |
-| `gpu_free_mib` | the GPU counts as free with no compute process and at most this much memory in use (default 500) |
-| `fast_poll_s` | seconds between passes while a machine recovers after a Vast rental (default 5) |
-| `idle_job_images` | image name prefixes of your own idle job (a miner, say) on the machine: never a renter, and its GPU use does not block the agent's start (default none) |
+| `docker_events` | follow `docker events` on each machine with `paralon_agent`: pause Paralon the moment a non-Paralon container starts, and unlist Vast (`unlist_vast`) and stop your idle job the moment a Paralon rental container starts (default `true`) |
+| `gpu_free_mib` | the GPU counts as free with no compute process and at most this much memory in use (default 500); used before the agent starts after a Vast rental and before Vast is relisted after a Paralon rental |
+| `fast_poll_s` | seconds between passes while a machine recovers after a Vast rental, or waits for the GPU before a Vast relist (default 5) |
+| `idle_job_images` | image name prefixes of your own idle job (a miner, say) on the machine: never a renter, its GPU use does not block the agent's start, and (with `paralon_agent`) it is stopped while a Paralon rental runs and started again after -- a Vast default job through `vastai stop/start instance`, a plain container through Docker (default none) |
 
 The old single-machine format (`vast_machine_id` and `paralon_node_id` at the
 top level) still loads. An old (v0.1) state file is carried over only when
@@ -314,6 +382,31 @@ service with no mode set keeps running and warns until you run `mode ...`;
 every pass re-reads the state file, so it picks the mode up without a
 restart.
 
+### Stopping it for good, or removing it
+
+First run `mode vast` for each machine (or once with no machine id, for
+all). It relists on Vast what the tool unlisted, pauses Paralon, and starts
+your idle job if the tool stopped it and no Paralon rental is running. A
+machine the tool unlisted on Vast **stays unlisted while the service is
+stopped**: the unit's `Restart=always` covers a crash, not a deliberate
+`systemctl stop`. Check with `status` that nothing is owed, then:
+
+```sh
+python3 vast_paralon_dual.py mode vast
+python3 vast_paralon_dual.py status        # "took off (owed)" all false
+sudo systemctl disable --now vast-paralon-dual
+sudo rm /etc/systemd/system/vast-paralon-dual.service && sudo systemctl daemon-reload
+rm -r ~/.config/vast-paralon-dual ~/.local/state/vast-paralon-dual ~/vast-paralon-dual
+```
+
+If a Paralon rental is still running, `mode vast` relists Vast at once (a
+Vast booking then reclaims a spot rental) but your idle job stays stopped
+until the rental ends; and in the seconds after a rental, while its
+container tears down, the relist waits for the GPU. Leave the service
+running until `status` shows nothing owed. Removing the tool leaves
+the Paralon agent and Vast's software as they are; the `vpdual-pin-jupyter-*`
+container can be removed with `docker rm`.
+
 ## API use
 
 - Paralon (`https://paraloncloud.com/api/v1`, `Authorization: Bearer prlc_...`):
@@ -324,7 +417,7 @@ restart.
   through the API, and on-demand cannot be reclaimed);
   every 30 s for 4 minutes at a critical moment (a write that landed, a
   reclaim, a Vast renter or a Paralon container starting on a machine) and
-  while a machine recovers after a Vast rental; at most 4 calls a minute; exponential
+  while a machine recovers after a Vast rental; at most 6 calls a minute; exponential
   back-off on every HTTP error and on network errors. No pause write is sent
   for a node that reads OFFLINE (it cannot be rented). With many machines changing in the same
   minute, writes beyond the limit wait for a later pass.
@@ -333,7 +426,10 @@ restart.
   each pass, one read of the machine (`docker ps -a --no-trunc --format ...`
   and `nvidia-smi`); on a Vast arrival `docker stop -t 2 <id>` for the agent,
   then `docker kill <id>` for the containers it started; `docker start <id>`
-  for the agent; and `docker events` (one long-lived stream per machine). The agent is found by its image (`ghcr.io/paraloncloud/agent`),
+  for the agent; `docker stop -t 2 <id>` / `docker start <id>` for your
+  idle job when it is a plain container; and `docker events` (one
+  long-lived stream per machine; it prints each started container's name,
+  image and `paralon.type` label). The agent is found by its image (`ghcr.io/paraloncloud/agent`),
   because it renames its own container when it updates. Each pass also runs
   one short shell command for the Jupyter pin: `docker image inspect`, then
   `docker create` only if the pin is missing, and `docker rm` of older pins.
@@ -344,7 +440,12 @@ restart.
 - Vast (`vastai` CLI, checked against version 1.3.0):
   `vastai show machines --raw`, `vastai list machine <id> --price_gpu ...
   --price_min_bid ... --price_disk ... --price_inetu ... --price_inetd ...
-  --end_date ...`, `vastai unlist machine <id>`.
+  --end_date ...`, `vastai unlist machine <id>`. With `idle_job_images`
+  and a Vast default job only: `vastai show instances --raw` (while a
+  Paralon rental runs beside your job, and when its start is owed), `vastai
+  stop instance <id>` and `vastai start instance <id>` for that job --
+  never a renter's instance. These two exit 0 whatever the server says, so
+  the tool checks for their "stopping/starting instance <id>." reply.
 
 ## Known limits
 
@@ -369,6 +470,23 @@ restart.
   Without it, Vast's image cleanup can delete Paralon's Jupyter image and the
   node shows "not ready" until the Paralon agent downloads it again, which it
   does only when it starts.
+- **Without `paralon_agent` the gaps are a minute wide.** Vast is unlisted
+  only once a pass sees `rented` on Paralon's API (a Vast booking in that
+  minute shares the GPU until the spot reclaim ends the Paralon rental, 2
+  minutes later), your idle job is not stopped at all, and Vast is relisted
+  without waiting for the GPU.
+- A Paralon rental is told apart from Paralon's other containers by the
+  `paralon.type=rental` label Paralon puts on it. If Paralon stops labelling
+  rentals, the immediate unlist and idle-job stop fall back to the next pass
+  that sees `rented` on the API.
+- A stored Vast instance keeps the node paused for as long as it is stored;
+  a renter can leave a stopped instance for days. That is Paralon time given
+  up so a resume never lands on a Paralon renter.
+- With `keep_vast_listed`, Vast stays listed during a Paralon rental by
+  design: a Vast booking reclaims the spot rental, and the two share the GPU
+  for the 2-minute notice.
+- Stopping a Vast default job takes Vast a few seconds; the immediate stop on
+  a rental container starting narrows that window but cannot close it.
 
 ## Compliance
 
@@ -379,8 +497,7 @@ This tool stops only Paralon's agent and its containers, never Vast's.
 
 ## Possible future work
 
-A price floor (pause Paralon below a set price), options for paused/stopped
-instances. If Paralon
+A price floor (pause Paralon below a set price). If Paralon
 adds an inference/benchmark switch for paused nodes, stopping the agent will
 no longer be needed.
 

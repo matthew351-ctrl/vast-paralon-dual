@@ -3,8 +3,10 @@ next pass.
 
 One watcher per machine the tool can reach (`paralon_agent`: "local", or
 user@host over ssh). It streams `docker events` for container starts and, for
-each one, calls `on_start(name, image)` -- the controller pauses Paralon at
-once for a non-Paralon container -- then wakes the main loop for a full pass.
+each one, calls `on_start(name, image, paralon_type)` -- the controller pauses
+Paralon at once for a non-Paralon container, and unlists Vast / stops the
+host's idle job at once for a Paralon RENTAL container (label
+paralon.type=rental) -- then wakes the main loop for a full pass.
 It only READS `docker events`; it never touches a container itself.
 """
 
@@ -17,7 +19,8 @@ log = logging.getLogger("vpdual.docker")
 
 RESTART_DELAY_S = 30
 EVENTS_ARGS = ["events", "--filter", "type=container", "--filter", "event=start",
-               "--format", "{{.Actor.Attributes.name}}\t{{.Actor.Attributes.image}}"]
+               "--format", "{{.Actor.Attributes.name}}\t{{.Actor.Attributes.image}}"
+               "\t{{index .Actor.Attributes \"paralon.type\"}}"]   # labels are attributes
 
 
 def events_cmd(target="local"):
@@ -30,8 +33,9 @@ def events_cmd(target="local"):
 
 def start_watcher(wake, popen=subprocess.Popen, sleep=time.sleep, retries=None,
                   target="local", on_start=None):
-    """Watch `target` for container starts: call on_start(name, image) for
-    each, then set `wake`. The stream ends when the Docker daemon restarts or
+    """Watch `target` for container starts: call on_start(name, image,
+    paralon_type) for each (paralon_type "" when the container has no
+    paralon.type label), then set `wake`. The stream ends when the Docker daemon restarts or
     the ssh link drops, so it is reopened after a pause (forever by default;
     `retries` bounds it for tests)."""
     cmd = events_cmd(target)
@@ -50,11 +54,13 @@ def start_watcher(wake, popen=subprocess.Popen, sleep=time.sleep, retries=None,
             for line in proc.stdout:
                 if not line.strip():
                     continue
-                name, _, image = line.rstrip("\n").partition("\t")
+                name, _, rest = line.rstrip("\n").partition("\t")
+                image, _, ptype = rest.partition("\t")
+                ptype = "" if ptype.strip() == "<no value>" else ptype.strip()
                 log.info("%s: container %s started; checking now", target, name)
                 if on_start is not None:
                     try:
-                        on_start(name, image)
+                        on_start(name, image, ptype)
                     except Exception:            # never kill the watcher
                         log.exception("%s: handling the start of %s failed", target, name)
                 wake.set()

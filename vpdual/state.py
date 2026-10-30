@@ -1,7 +1,7 @@
 """A small JSON state file, written atomically.
 
 Per Vast machine it records the mode, which side THIS tool took off (and
-whether it stopped the Paralon agent), and the
+whether it stopped the Paralon agent, or the host's idle job), and the
 listing terms the Vast machine had just before the tool unlisted it, so a
 restart never forgets to relist something (and never relists something it did
 not unlist), and a relist restores the machine's own prices.
@@ -10,6 +10,7 @@ not unlist), and a relist restores the machine's own prices.
                           "took_off": {"vast": false, "paralon": false,
                                        "agent": false},
                           "saved_listing": null,
+                          "idle_job": [],
                           "reclaim_sent_at": null,
                           "decisions": [...]}}}
 """
@@ -31,6 +32,11 @@ def default_machine_state():
         "took_off": {"vast": False, "paralon": False, "agent": False},
         # The Vast listing terms saved just before the tool unlisted it.
         "saved_listing": None,
+        # The host's idle job(s) THIS tool stopped for a Paralon rental and
+        # owes a start (v0.5.0): [{"kind": "vast", "id": <instance id>} or
+        # {"kind": "docker", "id": <container id>}, each with a "name"]. Saved
+        # before the stop; an entry goes only when a later read shows it back.
+        "idle_job": [],
         "reclaim_sent_at": None,
         "decisions": [],
     }
@@ -46,6 +52,10 @@ def _clean(saved):
     st["took_off"] = {k: bool(took.get(k)) for k in ("vast", "paralon", "agent")}
     if isinstance(saved.get("saved_listing"), dict) and saved["saved_listing"]:
         st["saved_listing"] = dict(saved["saved_listing"])
+    if isinstance(saved.get("idle_job"), list):
+        st["idle_job"] = [dict(j) for j in saved["idle_job"]
+                          if isinstance(j, dict) and j.get("kind") in ("vast", "docker")
+                          and j.get("id") not in (None, "")]
     if isinstance(saved.get("reclaim_sent_at"), (int, float)):
         st["reclaim_sent_at"] = saved["reclaim_sent_at"]
     if isinstance(saved.get("decisions"), list):
@@ -54,7 +64,7 @@ def _clean(saved):
 
 
 def owes_something(mstate):
-    return any(mstate["took_off"].values())
+    return any(mstate["took_off"].values()) or bool(mstate.get("idle_job"))
 
 
 class StateStore:
