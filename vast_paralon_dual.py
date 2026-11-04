@@ -5,6 +5,7 @@
     python3 vast_paralon_dual.py status      # both sides; what it would do
     python3 vast_paralon_dual.py mode dual [VAST_MACHINE_ID]
     python3 vast_paralon_dual.py run         # the watcher (the service)
+    python3 vast_paralon_dual.py ui          # web page on http://127.0.0.1:8787
     python3 vast_paralon_dual.py service     # print the systemd unit
 """
 

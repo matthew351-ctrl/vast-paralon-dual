@@ -8,6 +8,32 @@ touches the Vast daemon, its packages or its containers. On each GPU machine
 it stops and starts only Paralon's agent, the containers that agent started,
 and your own idle job if you name one (`idle_job_images`).
 
+## What's new in 0.6.0
+
+- **A web page: `ui`.** `python3 vast_paralon_dual.py ui` serves a local
+  page (standard library only, nothing loaded from the internet) with each
+  machine's Vast and Paralon side, what the next pass would do and the last
+  decisions, as a grid of cards or a table. It is the same data as `status`.
+  See [Web UI](#web-ui).
+- **Machine names.** An optional `name` per machine in the config; without
+  one, the hostname Vast reports for your machine is shown, else its id.
+  `status` shows them too.
+- **Mode switch from the page.** vast / paralon / dual per machine, after a
+  confirm. It is saved to the state file only; the running service applies
+  it on its next pass, so it stays the only process acting on Vast and
+  Paralon.
+- **Settings tab.** Edit the config from the page: every setting with its
+  unit and default, and your machines. Changes are checked by the same
+  validator the tool uses, shown as a diff before saving, backed up, and
+  written atomically with mode 600. It refuses to remove a machine the tool
+  still owes a relist. The API key is never shown.
+- **Light and dark.** Follows your system, or an Auto / Light / Dark switch.
+- **Help on every term.** An (i) beside each label explains it, on hover,
+  keyboard focus or tap, and always opens fully on screen.
+- **Safe by default.** It listens on 127.0.0.1 only; a LAN address prints a
+  warning. Every change needs a per-run token from the page and is refused
+  from other web sites and from unexpected host names.
+
 **Set `paralon_agent` for every machine.** It is how the tool runs `docker`
 on the machine (`local`, or `user@host` over ssh), and the protections need
 it: seeing a renter from the machine's own containers, acting on
@@ -152,6 +178,7 @@ vast_paralon_dual.py [-c CONFIG] init [options]
 vast_paralon_dual.py [-c CONFIG] status [VAST_MACHINE_ID]
 vast_paralon_dual.py [-c CONFIG] [--dry-run] mode vast|paralon|dual [VAST_MACHINE_ID]
 vast_paralon_dual.py [-c CONFIG] [--dry-run] [-v] run
+vast_paralon_dual.py [-c CONFIG] [--dry-run] ui [--host HOST] [--port PORT]
 vast_paralon_dual.py [-c CONFIG] service
 ```
 
@@ -171,6 +198,66 @@ vast_paralon_dual.py [-c CONFIG] service
 - `service`: prints the systemd unit filled in for your account, Python and
   paths (template: `systemd/vast-paralon-dual.service`).
 - `--dry-run`: logs what it would do; no API write, no state-file write.
+
+## Web UI
+
+```sh
+python3 vast_paralon_dual.py ui            # then open http://127.0.0.1:8787
+```
+
+A small page served by the tool itself (standard library only, nothing
+loaded from the internet). It follows the system's light/dark setting, or
+the Auto / Light / Dark switch in its header (remembered in the browser);
+the colours follow Paralon Cloud's own app theme. Machines show as
+a grid of cards, as many side by side as the screen fits (one column on a
+phone), or as a table with one row per machine. Each card is titled by the
+machine's name (see `machines[].name`) and shows its status at a glance
+(Vast rented, Paralon rented, free on both, unreadable...), the mode, both
+sides, what this tool owes (took off) and what the next pass would do; its
+"Details" hold the Paralon agent and the machine's containers, the relist
+terms and the last 5 decisions. Every term has an (i) that explains it, on
+hover, keyboard focus or tap. It refreshes every 15 s. It is the
+same data as `status` (`GET /api/status` serves it as JSON) and, like
+`status`, it writes nothing to Vast or Paralon.
+
+Each machine has a vast / paralon / dual switch. After a confirm, the mode is
+**saved** to the state file, as `mode` does, and nothing else: the running
+`run` service applies it on its next pass (within `poll_interval_s`). The
+page never runs a pass of its own, so the service stays the only process
+acting on Vast and Paralon. If the service is not running, nothing changes
+until it starts. With `--dry-run` nothing is saved.
+
+A **Settings** tab edits the config file: every setting with its unit and
+default, the shared Vast listing fallbacks, and the machines (add, edit,
+remove; name, ids, `paralon_agent`, listing overrides). "Review changes"
+checks the edit with the same validator `status` and `run` use, marks each
+problem beside its field and shows old against new before you confirm.
+Nothing is saved while any check fails. A save keeps your `_` comments and
+custom keys, the key order and the indent; the old file is kept as
+`config.json.bak-<date>-<time>` (the last 10), and the new one is written
+atomically with mode 600. It refuses to remove a machine the tool still owes
+something (a relist, an un-pause, a start), to change its Paralon node while
+an un-pause is owed, and to move `state_file` while anything is owed.
+The running service reads the config only when it starts, so restart it to
+apply a saved change (`sudo systemctl restart vast-paralon-dual`); the page
+itself uses the new config at once. The Paralon API key is never shown or
+sent: the page says only whether it is set and where it is read from; change
+it with `init` or by editing the `env` file next to the config. With
+`--dry-run` the page shows the changes and saves nothing.
+
+It listens on **127.0.0.1 only** by default (port 8787). There is no login:
+anyone who can open the page can switch modes and edit the config. To use it from your phone or
+another computer, prefer an SSH tunnel:
+
+```sh
+ssh -L 8787:127.0.0.1:8787 you@gpu-host     # then http://127.0.0.1:8787 there
+```
+
+`--host 0.0.0.0` (or a LAN address) serves it to your whole network and
+prints a warning saying so; only do that on a network you trust, and open it
+by IP address (other host names are refused, which stops DNS-rebinding
+pages). A switch or a save needs a random token from the page, changed each
+time `ui` starts, and is refused from any other web site.
 
 ## How it decides
 
@@ -327,7 +414,7 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
   "on_paralon_rental": "unlist_vast",
   "machines": [
     {"vast_machine_id": 12345, "paralon_node_id": "node-id",
-     "paralon_agent": "local"},
+     "paralon_agent": "local", "name": "GPU box 1"},
     {"vast_machine_id": 12346, "paralon_node_id": "other-node-id",
      "paralon_agent": "you@gpu-machine-2",
      "vast_listing": {"price_gpu": 0.60, "price_min_bid": 0.45}}
@@ -340,6 +427,7 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | --- | --- |
 | `on_paralon_rental` | `unlist_vast` (default) or `keep_vast_listed` |
 | `machines` | list of `{vast_machine_id, paralon_node_id}`, each with an optional `paralon_agent` and an optional `vast_listing` that overrides the top-level one |
+| `machines[].name` | optional label for people (up to 64 characters), shown by `status` and the web UI. Left out, the hostname Vast reports for the machine is shown, else the Vast machine id. Only a label: commands and the web UI's switch still use the Vast machine id |
 | `machines[].paralon_agent` | how to run `docker` on that machine: `local`, or `user@host` for ssh (key login, `BatchMode`; the user must be in the `docker` group). **Required for the protections**: renter detection from the machine's own containers, `docker_events`, stopping Paralon's agent and its leftovers during Vast rentals, stopping your idle job during Paralon rentals, and the GPU-free waits before the agent starts and before Vast is relisted. Left out, the tool has only Vast's running count and Paralon's API on a 60 s pass |
 | `vast_listing` | optional fallback listing terms (see Relist prices); keys map to `vastai list machine` flags: `price_gpu`, `price_min_bid`, `price_disk`, `price_inetu`, `price_inetd`, `discount_rate`, `min_chunk`, `end_date` or `duration` (not both), `vol_size`, `vol_price` |
 | `state_file` | default `~/.local/state/vast-paralon-dual/state.json` |

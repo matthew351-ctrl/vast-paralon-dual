@@ -19,21 +19,21 @@
       "price": {
         "currency": "USD",
         "custom": null,
-        "default": 0.53,
-        "renter_pays": 0.477,
+        "default": 0.6,
+        "renter_pays": 0.54,
         "spot": true,
         "unit": "hour"
       },
       "rental": {
         "status": "running",
-        "started_at": "2026-10-25T03:30:56Z",
+        "started_at": "2026-01-01T00:30:00Z",
         "ends_at": null,
-        "price_per_hour": 0.45
+        "price_per_hour": 0.5
       },
       "verification": {
         "status": "verified",
         "error": "",
-        "verified_at": "2026-10-25T02:57:55Z"
+        "verified_at": "2026-01-01T00:00:00Z"
       }
     }
   ]

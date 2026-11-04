@@ -5,9 +5,10 @@
   "on_paralon_rental": "unlist_vast",
 
   "_paralon_agent": "STRONGLY RECOMMENDED, per machine. How to reach Docker on that GPU machine, so the Paralon agent is stopped while a Vast renter has the GPU and started again after: \"local\" when this tool runs on that machine, or user@host for ssh (key login, a user in the docker group). Leave it out and the agent keeps starting inference and benchmarks beside Vast renters.",
+  "_name": "OPTIONAL, per machine: a label for people, e.g. \"GPU box 1\", shown by `status` and the web UI (up to 64 characters). Not a key: commands still take the Vast machine id. Left out, the hostname Vast reports for the machine is shown, else its id.",
   "machines": [
     {"vast_machine_id": 12345, "paralon_node_id": "your-paralon-node-id",
-     "paralon_agent": "local"},
+     "paralon_agent": "local", "name": "GPU box 1"},
     {"vast_machine_id": 12346, "paralon_node_id": "another-node-id",
      "paralon_agent": "you@gpu-machine-2",
      "vast_listing": {"price_gpu": 0.60, "price_min_bid": 0.45}}

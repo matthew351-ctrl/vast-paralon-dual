@@ -11,6 +11,7 @@ level) are still accepted and read as a one-machine list.
 
 import json
 import os
+import unicodedata
 from dataclasses import dataclass, field
 
 from .agent import valid_target
@@ -48,8 +49,29 @@ DEFAULT_CONFIG = "~/.config/vast-paralon-dual/config.json"
 DEFAULT_STATE = "~/.local/state/vast-paralon-dual/state.json"
 
 
+MAX_NAME = 64
+
+
+def clean_name(value):
+    """A machine label as shown to people: a string, control characters
+    dropped, trimmed, at most MAX_NAME characters; "" if nothing is left.
+    Used to check the config's `name` and to tidy Vast's `hostname`."""
+    if not isinstance(value, str):
+        return ""
+    text = "".join(" " if unicodedata.category(ch) in ("Cc", "Zl", "Zp")
+                   else "" if unicodedata.category(ch) == "Cf" else ch
+                   for ch in value)
+    return " ".join(text.split())[:MAX_NAME].strip()
+
+
 class ConfigError(Exception):
-    """The config file is missing, unreadable or incomplete."""
+    """The config file is missing, unreadable or incomplete. `errors` holds
+    every problem found as (field, message) pairs -- the web UI's settings
+    show each beside its field; the exception's message is the first."""
+
+    def __init__(self, message, errors=None):
+        super().__init__(message)
+        self.errors = list(errors) if errors else [("", message)]
 
 
 @dataclass
@@ -63,6 +85,9 @@ class Machine:
     # while a Vast renter has the GPU: "local" or "user@host" (ssh). Empty =
     # not managed (the agent keeps running beside Vast renters).
     paralon_agent: str = ""
+    # Optional label for people ("GPU box 1"): `status` and the web UI.
+    # Never a key -- commands still take the Vast machine id.
+    name: str = ""
 
 
 @dataclass
@@ -95,121 +120,165 @@ def config_path(path=None):
     return os.path.abspath(os.path.expanduser(path or DEFAULT_CONFIG))
 
 
-def _check_listing(listing, where):
+def _check_listing(listing, where, errors):
     if not isinstance(listing, dict):
-        raise ConfigError(f"\"{where}\" must be an object")
+        errors.append((where, f"\"{where}\" must be an object"))
+        return {}
     unknown = sorted(k for k in listing
                      if k not in LISTING_FLAGS and not k.startswith("_"))
     if unknown:
-        raise ConfigError(f"unknown {where} keys: {', '.join(unknown)}")
+        errors.append((where, f"unknown {where} keys: {', '.join(unknown)}"))
     for key in NUMERIC_KEYS:
         if key in listing and (isinstance(listing[key], bool)
                                or not isinstance(listing[key], (int, float))):
-            raise ConfigError(f"\"{where}.{key}\" must be a number")
+            errors.append((f"{where}.{key}",
+                           f"\"{where}.{key}\" must be a number"))
     if "end_date" in listing and "duration" in listing:
-        raise ConfigError(f"\"{where}\": set end_date OR duration, not both "
-                          "(vastai refuses the pair)")
+        errors.append((f"{where}.duration",
+                       f"\"{where}\": set end_date OR duration, not both "
+                       "(vastai refuses the pair)"))
     return {k: v for k, v in listing.items() if not k.startswith("_")}
 
 
-def _machine_list(raw):
+def _machine_list(raw, errors):
     legacy = "vast_machine_id" in raw or "paralon_node_id" in raw
     if "machines" in raw and legacy:
-        raise ConfigError("use either \"machines\" or the old "
-                          "vast_machine_id/paralon_node_id keys, not both")
+        errors.append(("machines", "use either \"machines\" or the old "
+                       "vast_machine_id/paralon_node_id keys, not both"))
+        return []
     if legacy:
         entries = [{"vast_machine_id": raw.get("vast_machine_id"),
                     "paralon_node_id": raw.get("paralon_node_id")}]
     else:
         entries = raw.get("machines")
     if not isinstance(entries, list) or not entries:
-        raise ConfigError(
+        errors.append((
+            "machines",
             "config needs \"machines\": [{\"vast_machine_id\": ..., "
-            "\"paralon_node_id\": \"...\"}] (run `init` to write one)")
+            "\"paralon_node_id\": \"...\"}] (run `init` to write one)"))
+        return []
     return entries
 
 
-def parse_config(raw, env=None):
+INT_SETTINGS = ("poll_interval_s", "paralon_min_get_interval_s",
+                "paralon_max_calls_per_min", "reclaim_retry_s", "gpu_free_mib",
+                "fast_poll_s", "jupyter_refresh_s")
+STR_SETTINGS = ("state_file", "vastai_bin", "paralon_base_url")
+
+
+def check_config(raw, env=None):
+    """Validate a config dict; nothing is read from or written to disk.
+    Returns (Config, []) or (None, [(field, message), ...]) with EVERY
+    problem found, in the order `parse_config` reports them. `load_config`
+    and the web UI's settings both use it."""
     env = os.environ if env is None else env
     if not isinstance(raw, dict):
-        raise ConfigError("config must be a JSON object")
+        return None, [("", "config must be a JSON object")]
+    errors = []
+
+    def err(where, msg):
+        errors.append((where, msg))
 
     policy = raw.get("on_paralon_rental", DEFAULT_POLICY)
     if policy not in POLICIES:
-        raise ConfigError(
+        err("on_paralon_rental",
             "config must set \"on_paralon_rental\" to one of: "
             + " | ".join(POLICIES)
             + f" (default {DEFAULT_POLICY}).\n"
             + "\n".join(f"  {k:<16} - {v}" for k, v in POLICY_HELP.items()))
+        policy = DEFAULT_POLICY
 
-    top_listing = _check_listing(raw.get("vast_listing", {}), "vast_listing")
+    top_listing = _check_listing(raw.get("vast_listing", {}), "vast_listing",
+                                 errors)
     machines, seen_ids, seen_nodes = [], set(), set()
-    for i, entry in enumerate(_machine_list(raw)):
+    for i, entry in enumerate(_machine_list(raw, errors)):
         where = f"machines[{i}]"
         if not isinstance(entry, dict):
-            raise ConfigError(f"{where} must be an object")
+            err(where, f"{where} must be an object")
+            continue
         unknown = sorted(k for k in entry if not k.startswith("_") and k not in
                          ("vast_machine_id", "paralon_node_id", "vast_listing",
-                          "paralon_agent"))
+                          "paralon_agent", "name"))
         if unknown:
-            raise ConfigError(f"unknown {where} keys: {', '.join(unknown)}")
+            err(where, f"unknown {where} keys: {', '.join(unknown)}")
         try:
             vid = int(entry.get("vast_machine_id"))
         except (TypeError, ValueError):
-            raise ConfigError(f"{where}.vast_machine_id must be an integer")
+            err(f"{where}.vast_machine_id",
+                f"{where}.vast_machine_id must be an integer")
+            vid = None
         node = entry.get("paralon_node_id")
         if not node:
-            raise ConfigError(f"{where}.paralon_node_id is missing")
-        node = str(node)
-        if vid in seen_ids or node in seen_nodes:
-            raise ConfigError(f"{where}: machine {vid} or node {node} is "
-                              "listed twice")
+            err(f"{where}.paralon_node_id", f"{where}.paralon_node_id is missing")
+            node = None
+        else:
+            node = str(node)
+        if (vid is not None and vid in seen_ids) or \
+                (node is not None and node in seen_nodes):
+            err(where, f"{where}: machine {vid} or node {node} is listed twice")
         seen_ids.add(vid)
         seen_nodes.add(node)
         listing = dict(top_listing)
         listing.update(_check_listing(entry.get("vast_listing", {}),
-                                      f"{where}.vast_listing"))
+                                      f"{where}.vast_listing", errors))
         agent = entry.get("paralon_agent", "")
         if agent and (not isinstance(agent, str) or not valid_target(agent)):
-            raise ConfigError(f"{where}.paralon_agent must be \"local\" or "
-                              f"user@host for ssh (got {agent!r})")
-        machines.append(Machine(vid, node, listing, agent or ""))
+            err(f"{where}.paralon_agent",
+                f"{where}.paralon_agent must be \"local\" or user@host for "
+                f"ssh (got {agent!r})")
+            agent = ""
+        name = entry.get("name", "")
+        if name != "" and clean_name(name) != name:
+            err(f"{where}.name",
+                f"{where}.name must be text of 1-{MAX_NAME} characters: no "
+                "line breaks, tabs or control characters, no leading, "
+                f"trailing or double spaces (got {name!r})")
+            name = ""
+        if vid is not None and node is not None:
+            machines.append(Machine(vid, node, listing, agent or "", name))
 
     known = set(Config.__dataclass_fields__) - {"paralon_api_key", "machines"}
     unknown = sorted(k for k in raw if k not in known and not k.startswith("_")
                      and k not in ("machines", "vast_machine_id",
                                    "paralon_node_id"))
     if unknown:
-        raise ConfigError(f"unknown config keys: {', '.join(unknown)}")
+        err("", f"unknown config keys: {', '.join(unknown)}")
 
     kwargs = {k: raw[k] for k in known if k in raw}
-    for key in ("poll_interval_s", "paralon_min_get_interval_s",
-                "paralon_max_calls_per_min", "reclaim_retry_s", "gpu_free_mib",
-                "fast_poll_s", "jupyter_refresh_s"):
+    for key in INT_SETTINGS:
         if key in kwargs and (isinstance(kwargs[key], bool)
                               or not isinstance(kwargs[key], int)
                               or kwargs[key] < 1):
-            raise ConfigError(f"\"{key}\" must be a whole number >= 1 "
-                              f"(got {kwargs[key]!r})")
+            err(key, f"\"{key}\" must be a whole number >= 1 "
+                     f"(got {kwargs[key]!r})")
     if "docker_events" in kwargs and not isinstance(kwargs["docker_events"], bool):
-        raise ConfigError("\"docker_events\" must be true or false (no quotes)")
+        err("docker_events", "\"docker_events\" must be true or false (no quotes)")
     imgs = kwargs.get("idle_job_images", [])
     if not isinstance(imgs, list) or not all(isinstance(i, str) and i for i in imgs):
-        raise ConfigError("\"idle_job_images\" must be a list of image name prefixes")
-    for key in ("state_file", "vastai_bin", "paralon_base_url"):
+        err("idle_job_images",
+            "\"idle_job_images\" must be a list of image name prefixes")
+    for key in STR_SETTINGS:
         if key in kwargs and (not isinstance(kwargs[key], str) or not kwargs[key]):
-            raise ConfigError(f"\"{key}\" must be a non-empty string")
+            err(key, f"\"{key}\" must be a non-empty string")
+    key = env.get("PARALON_API_KEY", "").strip()
+    if not key:
+        err("PARALON_API_KEY",
+            "PARALON_API_KEY is not set (a prlc_... key with the "
+            "\"My nodes\" permission)")
+    if errors:
+        return None, errors
     kwargs["vast_listing"] = top_listing
     kwargs["on_paralon_rental"] = policy
     cfg = Config(machines=machines, **kwargs)
     cfg.state_file = os.path.expanduser(cfg.state_file)
-    cfg.paralon_api_key = env.get("PARALON_API_KEY", "").strip()
-    if not cfg.paralon_api_key:
-        raise ConfigError(
-            "PARALON_API_KEY is not set (a prlc_... key with the "
-            "\"My nodes\" permission)")
-    if cfg.paralon_max_calls_per_min < 1:
-        raise ConfigError("paralon_max_calls_per_min must be >= 1")
+    cfg.paralon_api_key = key
+    return cfg, []
+
+
+def parse_config(raw, env=None):
+    cfg, errors = check_config(raw, env)
+    if errors:
+        raise ConfigError(errors[0][1], errors)
     return cfg
 
 

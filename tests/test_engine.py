@@ -155,8 +155,8 @@ class RelistPrice(Base):
         self.unlist_then_relist(v, listing={})   # no config fallbacks at all
         listing = v.writes[-1][2]
         self.assertEqual(listing["price_disk"], 0.2)
-        self.assertEqual(listing["price_inetu"], 4.0 / 1024)
-        self.assertEqual(listing["price_inetd"], 3.0 / 1024)
+        self.assertEqual(listing["price_inetu"], 0.005)
+        self.assertEqual(listing["price_inetd"], 0.002)
         self.assertEqual(listing["end_date"], 5000.0)
         self.assertNotIn("duration", listing)   # one offer end, not two
 

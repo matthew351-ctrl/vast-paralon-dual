@@ -161,7 +161,7 @@ class ParalonFixtureTests(unittest.TestCase):
         self.assertTrue(n.available)
         self.assertTrue(n.spot)
         self.assertTrue(n.rented)
-        self.assertEqual(n.price_text, "0.477 USD/hour")
+        self.assertEqual(n.price_text, "0.54 USD/hour")
         self.assertIn("RTX 4090", n.label)
 
     def test_ended_rental_record_is_not_rented(self):
@@ -207,8 +207,8 @@ class VastCLITests(unittest.TestCase):
         m = machines[12345]
         self.assertEqual((m.listed, m.running, m.resident), (True, 1, 2))
         self.assertEqual(m.listing_terms, {
-            "price_gpu": 0.43, "price_min_bid": 0.38, "price_disk": 0.333,
-            "price_inetu": 4.0 / 1024, "price_inetd": 3.0 / 1024,
+            "price_gpu": 0.5, "price_min_bid": 0.4, "price_disk": 0.25,
+            "price_inetu": 0.005, "price_inetd": 0.002,
             "min_chunk": 1, "discount_rate": 0.0, "end_date": 1798761600.0,
             "vol_size": 0})
 
@@ -217,9 +217,9 @@ class VastCLITests(unittest.TestCase):
         cli = VastCLI(runner=r)
         terms = cli.read_machines()[12345].listing_terms
         self.assertEqual(cli.list_args(12345, terms), [
-            "list", "machine", "12345", "--price_gpu", "0.43",
-            "--price_min_bid", "0.38", "--price_disk", "0.333",
-            "--price_inetu", "0.00390625", "--price_inetd", "0.0029296875",
+            "list", "machine", "12345", "--price_gpu", "0.5",
+            "--price_min_bid", "0.4", "--price_disk", "0.25",
+            "--price_inetu", "0.005", "--price_inetd", "0.002",
             "--discount_rate", "0", "--min_chunk", "1",
             "--end_date", "1798761600", "--vol_size", "0"])
 
@@ -295,23 +295,23 @@ class EndToEnd(TempDirMixin, unittest.TestCase):
         self.assertEqual(runner.calls[-1], ["vastai", "unlist", "machine",
                                             "12345", "--raw"])
         saved = self.mstate(12345)["saved_listing"]
-        self.assertEqual(saved["price_disk"], 0.333)
+        self.assertEqual(saved["price_disk"], 0.25)
         # Paralon rental ends; Vast reports the machine unlisted (no terms).
         vast_data["machines"][0].update(listed=False, listed_gpu_cost=None)
         nodes["nodes"][0].update(state="available", rental=None)
         clock.t += 61
         ctl.poll()
         self.assertEqual(runner.calls[-1][:3], ["vastai", "list", "machine"])
-        for flag, val in (("--price_gpu", "0.43"), ("--price_min_bid", "0.38"),
-                          ("--price_disk", "0.333"),
-                          ("--price_inetu", "0.00390625"),
-                          ("--price_inetd", "0.0029296875"),
+        for flag, val in (("--price_gpu", "0.5"), ("--price_min_bid", "0.4"),
+                          ("--price_disk", "0.25"),
+                          ("--price_inetu", "0.005"),
+                          ("--price_inetd", "0.002"),
                           ("--end_date", "1798761600")):
             i = runner.calls[-1].index(flag)
             self.assertEqual(runner.calls[-1][i + 1], val)
         # Still owed until the next read shows the machine listed again.
         self.assertIsNotNone(self.mstate(12345)["saved_listing"])
-        vast_data["machines"][0].update(listed=True, listed_gpu_cost=0.43)
+        vast_data["machines"][0].update(listed=True, listed_gpu_cost=0.5)
         clock.t += 61
         ctl.poll()
         self.assertIsNone(self.mstate(12345)["saved_listing"])

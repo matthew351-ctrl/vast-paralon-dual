@@ -22,8 +22,8 @@ def fixture(name):
 # The listing terms a listed fake machine reports, as `show machines --raw`.
 DEFAULT_TERMS = {"listed_gpu_cost": 0.45, "min_bid_price": 0.35,
                  "listed_storage_cost": 0.2,
-                 "listed_inet_up_cost": 4.0 / 1024,
-                 "listed_inet_down_cost": 3.0 / 1024,
+                 "listed_inet_up_cost": 0.005,
+                 "listed_inet_down_cost": 0.002,
                  "end_date": 5000.0}
 
 

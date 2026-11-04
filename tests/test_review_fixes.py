@@ -87,13 +87,13 @@ class RollingOfferStaysRolling(TempDirMixin, unittest.TestCase):
 class CommandLineValues(unittest.TestCase):
     def test_numbers_are_clean_and_ints_are_whole(self):
         args = VastCLI.list_args(1, {
-            "price_gpu": 0.43000000000000005, "price_min_bid": 0.38,
-            "price_disk": 0.09999999999999998, "price_inetu": 4.0 / 1024,
+            "price_gpu": 0.30000000000000004, "price_min_bid": 0.2,
+            "price_disk": 0.09999999999999998, "price_inetu": 0.005,
             "min_chunk": 2, "duration": 1209600.0})
         got = dict(zip(args[3::2], args[4::2]))
-        self.assertEqual(got, {"--price_gpu": "0.43", "--price_min_bid": "0.38",
+        self.assertEqual(got, {"--price_gpu": "0.3", "--price_min_bid": "0.2",
                                "--price_disk": "0.1",
-                               "--price_inetu": "0.00390625",
+                               "--price_inetu": "0.005",
                                "--min_chunk": "2", "--duration": "1209600"})
 
     def test_config_duration_string_passes_through(self):

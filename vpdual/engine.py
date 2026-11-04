@@ -111,7 +111,7 @@ def _offline(node):
     return raw.get("online") is False or raw.get("state") == "offline"
 
 ON_DEMAND_WARN_EVERY_S = 3600
-FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while a node is rented or an on-demand node waits -- as our fleet does
+FORCED_NODES_EVERY_S = 60     # fresh GET /nodes while a node is rented or an on-demand node waits
 # BURSTS at critical moments (v0.4.4): after a write that landed, a Vast renter
 # or a Paralon container starting on a machine, and while a machine recovers
 # after a Vast rental, GET /nodes is read fresh every BURST_EVERY_S. 30 s keeps
@@ -238,9 +238,10 @@ class Controller:
             self._save()
 
     # -- one pass ------------------------------------------------------
-    def read(self):
+    def read(self, fresh_ok=True):
         """Read both sides once. Returns (vast machines, paralon nodes) or
-        raises VastError / ParalonError."""
+        raises VastError / ParalonError. `fresh_ok=False` (the web UI's
+        status) never forces GET /nodes past the client's cache."""
         vms = self.vast.read_machines()
         fresh = False
         # Once a minute while it matters (a machine recovering, or one of our
@@ -252,7 +253,8 @@ class Controller:
         elif any(_needs_the_minute(self.paralon.cached_node(m.paralon_node_id))
                  for m in self.cfg.machines):
             every = FORCED_NODES_EVERY_S
-        if every and self.clock() - self._last_forced_nodes >= every:
+        if (fresh_ok and every
+                and self.clock() - self._last_forced_nodes >= every):
             fresh, self._last_forced_nodes = True, self.clock()
         nodes = {n.id: n for n in self.paralon.list_nodes(refresh=fresh)}
         return vms, nodes
@@ -345,7 +347,7 @@ class Controller:
                          "though the API shows no rental yet (starting, or tearing "
                          "down): counted as rented until it is gone")
         # An OFFLINE node cannot be rented, whatever `available` says (its agent
-        # is stopped while Vast rents): no pause write for it. Our fleet looped
+        # is stopped while Vast rents): no pause write for it. One machine looped
         # on that write all night once the API refused it (v0.4.3).
         paralon_up = node.available and not _offline(node)
         # A STORED Vast instance (stopped, can resume at any moment) keeps
