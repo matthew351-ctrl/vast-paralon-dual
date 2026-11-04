@@ -8,6 +8,19 @@ touches the Vast daemon, its packages or its containers. On each GPU machine
 it stops and starts only Paralon's agent, the containers that agent started,
 and your own idle job if you name one (`idle_job_images`).
 
+## What's new in 0.6.1
+
+- **`init` suggests the pairs.** Where a Paralon node's name matches a Vast
+  machine's hostname (ignoring case, spaces and dashes; exact, then prefix,
+  then a close match), that node is offered as the default: Enter takes it,
+  `-` skips, a number picks another. Nothing is paired without your answer,
+  and `--pair` works as before.
+- **Add a machine from a list.** The Settings tab's "Add a machine" offers
+  your Vast machines and Paralon nodes that the config does not have yet,
+  from the read the page already makes (no extra calls), with the node
+  pre-selected by the same name match. You still review the change and
+  save it; "Type the ids instead" adds one by hand.
+
 ## What's new in 0.6.0
 
 - **A web page: `ui`.** `python3 vast_paralon_dual.py ui` serves a local
@@ -149,8 +162,10 @@ reclaimed when a Vast renter arrives.
   logged in. If not, it says what to run.
 - Reads your machines (`vastai show machines --raw`) and nodes
   (`GET /nodes`), once each.
-- Asks for the policy, then which Paralon node goes with each Vast machine
-  (Enter skips a machine), then how to reach Docker on each paired machine
+- Asks for the policy, then which Paralon node goes with each Vast machine.
+  Where a node's name matches the machine's hostname it is offered as the
+  default (Enter takes it, `-` skips); otherwise Enter skips the machine.
+  Then it asks how to reach Docker on each paired machine
   (`local` or `user@host`), and checks once that it can see the Paralon agent
   there. It only reads; nothing is stopped.
 - Writes `~/.config/vast-paralon-dual/config.json`, the key file `env` next

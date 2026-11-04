@@ -17,6 +17,7 @@ import sys
 
 from .config import (DEFAULT_CONFIG, DEFAULT_POLICY, POLICIES, POLICY_HELP, ConfigError,
                      config_path, parse_config)
+from . import pairing
 from .agent import AgentError, DockerHost, agent_of, valid_target
 from .paralon import ParalonClient, ParalonError
 from .state import MODES, StateStore
@@ -141,17 +142,35 @@ def _vast_label(vm):
 
 
 def _ask_pairs(vms, nodes, ask, out):
+    """One question per Vast machine. Where a node's name matches the
+    machine's hostname (pairing.suggest), it is offered as the default:
+    Enter takes it, `-` skips, a number picks another. Nothing is paired
+    without an answer."""
     out("\nYour Paralon nodes:")
     for i, n in enumerate(nodes, 1):
         kind = "spot" if n.spot else "ON-DEMAND (switch to spot for dual)"
         out(f"  {i}) {n.id}  {n.label}  {kind}")
+    index = {n.id: i for i, n in enumerate(nodes, 1)}
+    guess = pairing.suggest(
+        [(vid, pairing.vast_names(vm)) for vid, vm in vms.items()],
+        [(n.id, pairing.node_names(n)) for n in nodes])
     pairs, used = [], set()
     for vid, vm in vms.items():
         out(f"\nVast machine {vid}: {_vast_label(vm)}")
+        default = None
+        if vid in guess and index[guess[vid][0]] not in used:
+            default = index[guess[vid][0]]
+            out(f"  suggested: node {default} ({nodes[default - 1].label}; "
+                f"{pairing.TIER_NAMES[guess[vid][1]]} name match)")
+        prompt = (f"  Pair with Paralon node number [{default}] (Enter = "
+                  f"{default}, - = skip): " if default else
+                  "  Pair with Paralon node number (Enter = skip): ")
         while True:
-            ans = ask("  Pair with Paralon node number (Enter = skip): ").strip()
-            if not ans:
+            ans = ask(prompt).strip()
+            if ans in ("-", "0") or (not ans and default is None):
                 break
+            if not ans:
+                ans = str(default)
             if ans.isdigit() and 1 <= int(ans) <= len(nodes) \
                     and int(ans) not in used:
                 used.add(int(ans))

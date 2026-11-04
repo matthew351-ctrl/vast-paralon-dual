@@ -149,6 +149,7 @@ class Controller:
         self._last_on_demand_warn = {}
         self._told_no_mode = set()
         self.pass_decisions = []      # (machine id, msg) made this pass
+        self.last_read = None         # (vast machines, paralon nodes), last read
         self.recovering = set()       # machine ids waiting on GPU / agent / node
         self._last_forced_nodes = 0.0
         self.burst_until = 0.0
@@ -257,6 +258,7 @@ class Controller:
                 and self.clock() - self._last_forced_nodes >= every):
             fresh, self._last_forced_nodes = True, self.clock()
         nodes = {n.id: n for n in self.paralon.list_nodes(refresh=fresh)}
+        self.last_read = (vms, nodes)   # the web UI's machine discovery reuses it
         return vms, nodes
 
     def poll(self, machine_id=None):

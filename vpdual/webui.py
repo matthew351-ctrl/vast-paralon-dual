@@ -54,11 +54,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from . import __version__
-from . import settings
+from . import pairing, settings
 from .agent import DockerHost
+from .config import clean_name
 from .engine import Controller
 from .state import MODES, StateStore
 from .status import status_data
+from .vast import VastError
 
 log = logging.getLogger("vpdual.ui")
 
@@ -151,6 +153,7 @@ class UIApp:
         self._lock = threading.Lock()     # one status read at a time
         self._cache = None                # (monotonic, generation, data)
         self._gen = 0                     # bumped by every saved mode
+        self._seen = None                 # (when, (vast machines, nodes)) last read
 
     def controller(self, dry_run):
         """A Controller on the state file as it is now (each loads it)."""
@@ -174,14 +177,59 @@ class UIApp:
             if (self._cache and self._cache[1] == gen
                     and now - self._cache[0] < STATUS_MAX_AGE_S):
                 return self._cache[2]
-            data = status_data(self.controller(dry_run=True), self.cfg,
-                               fresh_ok=False)
+            ctl = self.controller(dry_run=True)
+            data = status_data(ctl, self.cfg, fresh_ok=False)
+            if ctl.last_read is not None:
+                self._seen = (self.clock(), ctl.last_read)
             data.update(ok=True, version=__version__,
                         generated_at=int(self.clock()), refresh_s=REFRESH_S,
                         apply_within_s=self.cfg.poll_interval_s,
                         dry_run=self.dry_run, modes=list(MODES))
             self._cache = (now, gen, data)
             return data
+
+    def discover(self):
+        """GET /api/discover: the user's own Vast machines and Paralon nodes,
+        from the last status read (no call of its own), each marked if the
+        config already has it, and name-based pairing suggestions for the
+        ones it has not (the same matcher as `init`)."""
+        if self._seen is None:
+            try:
+                self.status()             # one ordinary, cached status read
+            except Exception:             # the Machines tab shows why
+                log.exception("ui: discovery read failed")
+        if self._seen is None:
+            return 200, {"ok": True, "read": False, "vast": [], "paralon": [],
+                         "suggest": {}, "message": "Your Vast machines and "
+                         "Paralon nodes could not be read yet (the Machines "
+                         "tab says why); you can type the ids by hand."}
+        at, (vms, nodes) = self._seen
+        have_v = {m.vast_machine_id for m in self.cfg.machines}
+        have_n = {m.paralon_node_id for m in self.cfg.machines}
+        good = {vid: vm for vid, vm in vms.items()
+                if not isinstance(vm, VastError)}
+        vast = []
+        for vid, vm in sorted(good.items()):
+            raw = vm.raw or {}
+            gpus = (f"{raw.get('num_gpus')}x {raw.get('gpu_name')}"
+                    if raw.get("num_gpus") and raw.get("gpu_name") else "")
+            vast.append({"id": vid, "hostname": clean_name(raw.get("hostname")),
+                         "gpus": clean_name(gpus), "listed": vm.listed,
+                         "configured": vid in have_v})
+        paralon = [{"id": n.id, "name": clean_name((n.raw or {}).get("name")),
+                    "label": clean_name(n.label), "spot": n.spot,
+                    "configured": n.id in have_n}
+                   for n in sorted(nodes.values(), key=lambda n: n.id)]
+        guess = pairing.suggest(
+            [(vid, pairing.vast_names(vm)) for vid, vm in good.items()
+             if vid not in have_v],
+            [(n.id, pairing.node_names(n)) for n in nodes.values()
+             if n.id not in have_n])
+        return 200, {"ok": True, "read": True, "read_at": int(at),
+                     "vast": vast, "paralon": paralon,
+                     "suggest": {str(vid): {"node": nid,
+                                            "match": pairing.TIER_NAMES[tier]}
+                                 for vid, (nid, tier) in guess.items()}}
 
     def set_mode(self, body):
         """POST /api/mode -> (HTTP code, reply). Saves the mode, nothing
@@ -396,6 +444,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(500, _err(f"status failed: {exc}"))
         elif path == "/api/config":
             self._json(*self.app.settings_get())
+        elif path == "/api/discover":
+            self._json(*self.app.discover())
         else:
             self._json(404, _err("not found"))
 
@@ -754,6 +804,10 @@ fieldset.m-edit { border: 1px solid var(--line); border-radius: 10px;
 fieldset.m-edit legend { font-weight: 600; padding: 0 4px;
   overflow-wrap: anywhere; }
 fieldset.m-edit details { margin-top: 6px; }
+.add-panel { margin-top: 12px; padding-top: 8px;
+  border-top: 1px dashed var(--line-strong); }
+.add-panel button { margin: 6px 6px 0 0; }
+.add-panel .field { max-width: 760px; }
 button.danger { color: var(--bad-fg); border-color: var(--bad-line);
   margin-top: 8px; }
 .s-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap;
@@ -983,6 +1037,16 @@ const HELP = {
     "user@host for ssh (key login; the user in the docker group). " +
     "Strongly recommended: without it the Paralon agent keeps starting " +
     "work beside Vast renters. Empty: not managed.",
+  "cfg.add": "Pick one of your Vast machines and one of your Paralon " +
+    "nodes that the config does not have yet. They come from the last read " +
+    "of your accounts (the Machines tab's), so nothing extra is asked of " +
+    "Vast or Paralon. Adding only changes this page's copy: review and save " +
+    "to keep it.",
+  "cfg.add.vast": "Machines in your Vast account that the config does not " +
+    "have yet: id, the hostname Vast reports, GPUs.",
+  "cfg.add.node": "Nodes in your Paralon account not paired yet. When a " +
+    "node's name matches the machine's hostname (ignoring case, spaces and " +
+    "dashes) it is chosen for you; check it before adding.",
   "cfg.m.vast_listing": "This machine's own fallback listing terms. Each " +
     "one left empty uses the shared Vast listing fallback."
 };
@@ -1574,7 +1638,7 @@ for (const name of TABS) {
 }
 
 // -- settings ---------------------------------------------------------
-const S = {data: null, cfg: null, dirty: false};
+const S = {data: null, cfg: null, dirty: false, disc: null};
 let fid = 0;
 function clone(x) { return JSON.parse(JSON.stringify(x)); }
 function sMsg(kind, text) {
@@ -1607,6 +1671,7 @@ async function loadSettings() {
       for (const f of g.fields) HELP_EXTRA["cfg." + f.key] =
         "Default: " + fmtDefault(f.default, f.type) + (f.unit ? " " + f.unit : "") + ".";
     renderSettings();
+    loadDiscover();
   } catch (e) {
     sMsg("bad", "Cannot load the settings: " + e.message);
   }
@@ -1848,19 +1913,110 @@ function renderSettings() {
     box.append(rm);
     mg.append(box);
   });
-  const add = el("button", null, "Add a machine");
-  add.type = "button";
-  add.addEventListener("click", () => {
-    if (!Array.isArray(cfg.machines)) cfg.machines = [];
-    cfg.machines.push({vast_machine_id: "", paralon_node_id: ""});
-    setDirty(true);
-    renderSettings();
-    const sets = $("s-form").querySelectorAll("fieldset.m-edit");
-    if (sets.length) sets[sets.length - 1].querySelector("input").focus();
-  });
-  mc.append(mg, add);
+  mc.append(mg, addPanel(cfg));
   form.append(mc);
   $("s-form").replaceChildren(form);
+}
+
+// "Add a machine": the user's own Vast machines and Paralon nodes (from the
+// last status read, GET /api/discover) that the edited config does not have
+// yet, with the node pre-selected where its name matches the machine's
+// hostname. Adding only edits the page's copy: Review -> diff -> Save, as
+// for any other change.
+async function loadDiscover() {
+  try {
+    const r = await fetch("/api/discover", {cache: "no-store",
+                                            headers: {"Accept": "application/json"}});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "HTTP " + r.status);
+    S.disc = j;
+  } catch (e) {
+    S.disc = {read: false, vast: [], paralon: [], suggest: {},
+              message: "Your machines could not be read (" + e.message +
+                       "); you can type the ids by hand."};
+  }
+  const old = $("add-panel");
+  if (old && S.cfg) old.replaceWith(addPanel(S.cfg));
+}
+function addManual(cfg) {
+  if (!Array.isArray(cfg.machines)) cfg.machines = [];
+  cfg.machines.push({vast_machine_id: "", paralon_node_id: ""});
+  setDirty(true);
+  renderSettings();
+  const sets = $("s-form").querySelectorAll("fieldset.m-edit");
+  if (sets.length) sets[sets.length - 1].querySelector("input").focus();
+}
+function addPanel(cfg) {
+  const box = el("div", "add-panel");
+  box.id = "add-panel";
+  const h = el("h3", null, "Add a machine");
+  h.append(info("cfg.add", "adding a machine"));
+  box.append(h);
+  const D = S.disc;
+  const machines = Array.isArray(cfg.machines) ? cfg.machines : [];
+  const takenV = new Set(machines.map((m) => String(m && m.vast_machine_id)));
+  const takenN = new Set(machines.map((m) => String(m && m.paralon_node_id)));
+  const vs = D ? D.vast.filter((v) => !takenV.has(String(v.id))) : [];
+  const ns = D ? D.paralon.filter((n) => !takenN.has(String(n.id))) : [];
+  if (!D) box.append(el("p", "muted small", "Looking for your machines..."));
+  else if (!D.read) box.append(el("p", "note", D.message));
+  else if (!vs.length) box.append(el("p", "muted small", "Every Vast machine " +
+    "in your account is already in the config."));
+  else if (!ns.length) box.append(el("p", "muted small", "Every Paralon node " +
+    "in your account is already paired."));
+  if (vs.length && ns.length) {
+    const vsel = el("select");
+    vsel.append(new Option("Choose a Vast machine", ""));
+    for (const v of vs) vsel.append(new Option(String(v.id) +
+      (v.hostname ? " · " + v.hostname : "") +
+      (v.gpus ? " · " + v.gpus : "") + (v.listed ? "" : " · unlisted"),
+      String(v.id)));
+    const nsel = el("select");
+    nsel.append(new Option("Choose a Paralon node", ""));
+    for (const n of ns) nsel.append(new Option((n.label || n.name || n.id) +
+      " · " + n.id + (n.spot ? "" : " · ON-DEMAND"), n.id));
+    const hint = el("p", "muted small");
+    const addBtn = el("button", "primary", "Add this pair");
+    addBtn.type = "button";
+    const sync = () => { addBtn.disabled = !(vsel.value && nsel.value); };
+    const pickNode = () => {
+      const g = D.suggest[vsel.value];
+      if (g && ns.some((n) => n.id === g.node)) {
+        nsel.value = g.node;
+        hint.textContent = "Node chosen by name (" + g.match + " match): " +
+          "check it before adding.";
+      } else {
+        nsel.value = "";
+        hint.textContent = vsel.value ? "No node name matches this machine: " +
+          "choose its node." : "";
+      }
+      sync();
+    };
+    vsel.addEventListener("change", pickNode);
+    nsel.addEventListener("change", () => { hint.textContent = ""; sync(); });
+    // start on the first machine that has a free name match, if any
+    const first = vs.find((v) => D.suggest[String(v.id)] &&
+                                 ns.some((n) => n.id === D.suggest[String(v.id)].node));
+    if (first) { vsel.value = String(first.id); pickNode(); } else sync();
+    addBtn.addEventListener("click", () => {
+      if (!Array.isArray(cfg.machines)) cfg.machines = [];
+      cfg.machines.push({vast_machine_id: Number(vsel.value),
+                         paralon_node_id: nsel.value});
+      setDirty(true);
+      renderSettings();
+      sMsg("ok", "Added Vast " + vsel.value + " with node " + nsel.value +
+           ". Review changes and save to keep it.");
+    });
+    box.append(
+      fieldRow("Vast machine", "cfg.add.vast", vsel, "", "", "add.vast"),
+      fieldRow("Paralon node", "cfg.add.node", nsel, "", "", "add.node"),
+      hint, addBtn);
+  }
+  const manual = el("button", null, "Type the ids instead");
+  manual.type = "button";
+  manual.addEventListener("click", () => addManual(cfg));
+  box.append(manual);
+  return box;
 }
 
 function clearErrors() {
