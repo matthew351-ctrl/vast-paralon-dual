@@ -6,10 +6,12 @@ own validator, backed up, written atomically; never the key).
 Standard library only. The page is inline HTML/CSS/JS served by this module
 (no CDN, no web fonts), so it works on a LAN with no internet.
 
-Reading: GET /api/status is `status_data()`, the data `status` prints: a dry
-run that writes nothing and never forces a fresh GET /nodes (the service owns
-those). One read serves every request for STATUS_MAX_AGE_S, so several open
-pages cost one `vastai show machines` and no extra Paralon calls.
+Reading: GET /api/status is `status_data()`, the data `status` prints. Since
+v0.7.0 the `run` service writes it after every pass (status.json beside the
+state file) and the page serves that -- no vastai, Paralon or SSH call per
+request. Only when it is missing or stale (service not running) is it a live
+dry run that writes nothing and never forces a fresh GET /nodes. One answer
+serves every request for STATUS_MAX_AGE_S, so several open pages cost one.
 
 Switching: POST /api/mode {"machine": <Vast id>, "mode": "vast|paralon|dual"}
 SAVES the mode and does nothing else -- `Controller.set_mode`: under the
@@ -59,15 +61,19 @@ from .agent import DockerHost
 from .config import clean_name
 from .engine import Controller
 from .state import MODES, StateStore
-from .status import status_data
+from .paralon import ParalonError
+from .status import snapshot_path, status_data
 from .vast import VastError
 
 log = logging.getLogger("vpdual.ui")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
-STATUS_MAX_AGE_S = 10     # one status read serves every request this long
+STATUS_MAX_AGE_S = 30     # one status read serves every request this long
 REFRESH_S = 15            # the page asks again this often
+# v0.7.0: STATUS_MAX_AGE_S was 10, under REFRESH_S, so every poll missed the
+# cache. The service snapshot is served while younger than this many passes.
+SNAPSHOT_MAX_AGE_PASSES = 3
 TOKEN_HEADER = "X-VPDual-Token"
 MAX_BODY = 4096
 DRAIN_MAX = 65536         # bytes read from a refused body at most
@@ -172,7 +178,17 @@ class UIApp:
         return _SECRET_RE.sub(lambda m: m.group(1) + REDACTED, text)
 
     def status(self):
+        """GET /api/status. v0.7.0: the `run` service's snapshot of its last
+        pass when it is younger than SNAPSHOT_MAX_AGE_PASSES x poll_interval_s
+        (`source: "service"`, `age_s`): no vastai, Paralon or SSH call at
+        all. Missing or stale (the service is not running): the live dry-run
+        read as before (`source: "live"`). The snapshot is read on every
+        request (one small file; a new pass shows at once, age_s is true);
+        only a live read is cached for STATUS_MAX_AGE_S."""
         with self._lock:
+            data = self._snapshot()
+            if data is not None:
+                return self._finish(data)
             now, gen = self.monotonic(), self._gen
             if (self._cache and self._cache[1] == gen
                     and now - self._cache[0] < STATUS_MAX_AGE_S):
@@ -181,23 +197,67 @@ class UIApp:
             data = status_data(ctl, self.cfg, fresh_ok=False)
             if ctl.last_read is not None:
                 self._seen = (self.clock(), ctl.last_read)
-            data.update(ok=True, version=__version__,
-                        generated_at=int(self.clock()), refresh_s=REFRESH_S,
-                        apply_within_s=self.cfg.poll_interval_s,
-                        dry_run=self.dry_run, modes=list(MODES))
-            self._cache = (now, gen, data)
+            data.update(source="live", age_s=None)
+            self._cache = (now, gen, self._finish(data))
             return data
+
+    def _finish(self, data):
+        data.update(ok=True, version=__version__,
+                    generated_at=int(self.clock()), refresh_s=REFRESH_S,
+                    apply_within_s=self.cfg.poll_interval_s,
+                    dry_run=self.dry_run, modes=list(MODES))
+        return data
+
+    def _snapshot(self):
+        """The service's status.json if fresh, with each machine's mode as
+        the state file has it NOW (a mode saved here shows at once; the
+        service applies it on its next pass). None: missing, unreadable or
+        stale."""
+        try:
+            with open(snapshot_path(self.cfg.state_file), encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not (isinstance(data, dict)
+                    and isinstance(data.get("machines"), list)):
+                return None
+            age = self.clock() - float(data["written_at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if not -5 <= age < SNAPSHOT_MAX_AGE_PASSES * self.cfg.poll_interval_s:
+            return None
+        try:
+            modes = StateStore(self.cfg.state_file).load()["machines"]
+        except (OSError, ValueError):
+            modes = {}
+        for row in data["machines"]:
+            st = modes.get(str(row.get("vast_machine_id")))
+            if st is not None:
+                row["mode"] = st["mode"]
+        data.update(source="service", age_s=max(0, int(age)))
+        return data
+
+    def _read_sides(self):
+        """Machine discovery's own read when no live status read has been
+        made lately (the service snapshot holds no raw records): `vastai
+        show machines` + the client's cached GET /nodes, no SSH."""
+        with self._lock:
+            if self._seen is not None and \
+                    self.clock() - self._seen[0] < STATUS_MAX_AGE_S:
+                return
+            ctl = self.controller(dry_run=True)
+            ctl.read(fresh_ok=False)
+            self._seen = (self.clock(), ctl.last_read)
 
     def discover(self):
         """GET /api/discover: the user's own Vast machines and Paralon nodes,
         from the last status read (no call of its own), each marked if the
         config already has it, and name-based pairing suggestions for the
         ones it has not (the same matcher as `init`)."""
-        if self._seen is None:
-            try:
-                self.status()             # one ordinary, cached status read
-            except Exception:             # the Machines tab shows why
-                log.exception("ui: discovery read failed")
+        try:
+            self._read_sides()
+        except (VastError, ParalonError) as exc:   # the Machines tab shows why
+            log.warning("ui: discovery read failed: %s", exc)
+        except Exception:
+            log.exception("ui: discovery read failed")
         if self._seen is None:
             return 200, {"ok": True, "read": False, "vast": [], "paralon": [],
                          "suggest": {}, "message": "Your Vast machines and "
@@ -1525,7 +1585,15 @@ function render(s) {
 function tick() {
   if (!lastAt) return;
   $("ago").textContent = "updated " + ago(Date.now() - lastAt) +
-    (busy() ? " (paused)" : "");
+    (busy() ? " (paused)" : "") + source(last);
+}
+// v0.7.0: where the data came from -- the run service's last pass, or a
+// live read this page caused (the service did not publish lately).
+function source(s) {
+  if (!s || !s.source) return "";
+  return s.source === "service" ?
+    "; from the service, " + s.age_s + " s ago" :
+    "; live read (service not running?)";
 }
 function schedule() {
   clearTimeout(timer);

@@ -109,27 +109,34 @@ class StateStore:
         return {"machines": {}}
 
     def save(self, state):
-        directory = os.path.dirname(os.path.abspath(self.path))
-        os.makedirs(directory, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=".state-", dir=directory)
+        write_json_atomic(self.path, state, prefix=".state-")
+
+
+def write_json_atomic(path, obj, prefix=".tmp-"):
+    """Write `obj` as JSON to `path`: a temp file in the same directory,
+    fsynced, then os.replace -- a reader never sees half a file. The state
+    file and (v0.7.0) the `run` service's status snapshot both use it."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=prefix, dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(state, fh, indent=2, sort_keys=True)
-                fh.write("\n")
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, self.path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-            raise
-        try:
-            dfd = os.open(directory, os.O_RDONLY)
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
-        except OSError:
+            os.unlink(tmp)
+        except FileNotFoundError:
             pass
+        raise
+    try:
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass

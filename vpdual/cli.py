@@ -16,7 +16,7 @@ from .engine import Controller
 from .install import add_init_args, render_service, run_init
 from .paralon import ParalonClient
 from .state import MODES, StateStore
-from .status import status_data, status_lines
+from .status import publish_snapshot, status_data, status_lines
 from .vast import VastCLI
 from .webui import DEFAULT_HOST, DEFAULT_PORT, serve
 
@@ -75,7 +75,8 @@ def cmd_run(ctl, cfg):
     try:
         while not stop.is_set():
             last = time.monotonic()
-            ctl.poll()
+            ok = ctl.poll()
+            publish_status(ctl, cfg, ok)
             # A machine recovering after a Vast rental is checked every
             # fast_poll_s until its GPU is free, its agent up and its node
             # back on Paralon.
@@ -91,6 +92,19 @@ def cmd_run(ctl, cfg):
         pass
     log.info("stopped")
     return 0
+
+
+def publish_status(ctl, cfg, ok):
+    """v0.7.0: after every pass (acted or held), the status snapshot the web
+    UI serves (status.publish_snapshot), so an open page costs no read of its
+    own. A dry run writes nothing. A failure here never stops the service."""
+    if ctl.dry_run:
+        return
+    try:
+        publish_snapshot(ctl, cfg, ok, ctl.clock)
+    except Exception as exc:          # the snapshot is a convenience
+        log.warning("could not write the status snapshot for the web UI: %s",
+                    exc)
 
 
 def cmd_mode(ctl, mode, machine_id):

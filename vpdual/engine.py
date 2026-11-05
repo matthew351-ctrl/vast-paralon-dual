@@ -150,6 +150,11 @@ class Controller:
         self._told_no_mode = set()
         self.pass_decisions = []      # (machine id, msg) made this pass
         self.last_read = None         # (vast machines, paralon nodes), last read
+        # v0.7.0: what the last pass read, for the status snapshot `run`
+        # publishes (status.pass_snapshot) -- the web UI then makes no
+        # vastai, Paralon or SSH call of its own. Reset at each pass start.
+        self.last_read_error = None   # why the last pass could not read
+        self.last_machines = {}       # paralon_agent -> MachineState | AgentError
         self.recovering = set()       # machine ids waiting on GPU / agent / node
         self._last_forced_nodes = 0.0
         self.burst_until = 0.0
@@ -277,11 +282,13 @@ class Controller:
                 self._told_no_mode.add(m.vast_machine_id)   # say it once
                 log.error("[%s] no mode set: run `mode vast|paralon|dual` "
                           "first; skipped", m.vast_machine_id)
+        self.last_read, self.last_read_error, self.last_machines = None, None, {}
         if not active:
             return False
         try:
             data = self.read()
         except (VastError, ParalonError) as exc:
+            self.last_read_error = str(exc)
             side = "Vast" if isinstance(exc, VastError) else "Paralon"
             for m in active:
                 self._decide(m, f"hold: {side} unreadable ({exc})",
@@ -410,8 +417,11 @@ class Controller:
     # -- the machine ---------------------------------------------------
     def _read_machine(self, m):
         try:
-            return self.docker(m.paralon_agent).machine_state()
+            ms = self.docker(m.paralon_agent).machine_state()
+            self.last_machines[m.paralon_agent] = ms
+            return ms
         except AgentError as exc:
+            self.last_machines[m.paralon_agent] = exc
             self._decide(m, f"cannot read the machine ({exc}); nothing is made "
                          "available until it reads", logging.WARNING)
             return None

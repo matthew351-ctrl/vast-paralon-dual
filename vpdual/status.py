@@ -7,16 +7,25 @@ GET /api/status. Nothing here writes: the controller is switched to dry-run.
 
 The dict holds only what `status` prints -- never the Paralon API key, the
 config, or the raw API records.
+
+v0.7.0: the `run` service publishes the same dict after every pass
+(`pass_snapshot()` -> `<state file dir>/status.json`), built from that
+pass's own reads, and the web UI serves the file instead of reading both
+sides again -- one /api/status then costs no vastai, Paralon or SSH call.
 """
 
 import logging
+import os
 
 from .agent import AgentError, agent_of
 from .config import clean_name
-from .engine import describe_listing
+from .engine import Controller, describe_listing
 from .paralon import ParalonError
-from .state import MODES, owes_something
+from .state import MODES, owes_something, write_json_atomic
 from .vast import VastError
+
+SNAPSHOT_NAME = "status.json"
+NOT_READ = "not read by the service's last pass (no mode set, or Vast unreadable)"
 
 log = logging.getLogger("vpdual")
 
@@ -70,20 +79,25 @@ def _paralon(n):
             "price": n.price_text, "rented": n.rented, "error": None}
 
 
-def status_data(ctl, cfg, machine_id=None, *, fresh_ok=True):
+def status_data(ctl, cfg, machine_id=None, *, fresh_ok=True, read=None):
     """Both sides, owed relists, and what one pass would do. Writes nothing.
 
     `fresh_ok=False` never forces a fresh GET /nodes past the client's cache
-    (the web UI asks every few seconds; the service owns the fresh reads)."""
+    (the web UI asks every few seconds; the service owns the fresh reads).
+    `read=(data, error)` uses a read already made (pass_snapshot) instead of
+    reading both sides here."""
     ctl.dry_run = True
     targets = ctl.targets(machine_id)
     out = {"policy": cfg.on_paralon_rental, "read_error": None,
            "machines": [], "next_pass": None, "removed_owing": []}
-    try:
-        data = ctl.read(fresh_ok=fresh_ok)
-    except (VastError, ParalonError) as exc:
-        data = None
-        out["read_error"] = str(exc)
+    if read is not None:
+        data, out["read_error"] = read
+    else:
+        try:
+            data = ctl.read(fresh_ok=fresh_ok)
+        except (VastError, ParalonError) as exc:
+            data = None
+            out["read_error"] = str(exc)
     for m in targets:
         st = ctl.mstate(m)
         relist = ctl.relist_listing(m)
@@ -133,6 +147,70 @@ def status_data(ctl, cfg, machine_id=None, *, fresh_ok=True):
         out["next_pass"] = [{"machine": mid, "name": names.get(mid, str(mid)),
                              "msg": msg} for mid, msg in ctl.pass_decisions]
     return out
+
+
+class _Replay:
+    """A `docker` for pass_snapshot: serves the machine reads the service's
+    pass just made (containers come from the same read); never a new SSH."""
+
+    def __init__(self, seen):
+        self.seen, self.target = seen, None
+
+    def __call__(self, target):
+        self.target = target
+        return self
+
+    def machine_state(self):
+        got = self.seen.get(self.target)
+        if got is None:
+            raise AgentError(NOT_READ)
+        if isinstance(got, Exception):
+            raise got
+        return got
+
+    def containers(self):
+        return self.machine_state().containers
+
+    def __getattr__(self, name):          # a write: never from a snapshot
+        def refuse(*_a, **_k):
+            raise AgentError(f"{name}: not available in a status snapshot")
+        return refuse
+
+
+def snapshot_path(state_file):
+    return os.path.join(os.path.dirname(os.path.abspath(state_file)),
+                        SNAPSHOT_NAME)
+
+
+def pass_snapshot(ctl, cfg):
+    """status_data for the pass `ctl` (the `run` service) just made, from
+    that pass's own reads -- no vastai, Paralon or SSH call of its own. A
+    separate dry-run Controller works out "next pass would", so the
+    service's own in-memory guards (recovery, bursts, just-sent stops) are
+    never touched. None when the pass read nothing (no machine has a mode):
+    the web UI then reads live, so the user can see the machines to set one."""
+    if ctl.last_read is None and ctl.last_read_error is None:
+        return None
+    shadow = Controller(cfg, ctl.vast, ctl.paralon, ctl.store, dry_run=True,
+                        clock=ctl.clock, docker=_Replay(dict(ctl.last_machines)))
+    return status_data(shadow, cfg, read=(ctl.last_read, ctl.last_read_error))
+
+
+def publish_snapshot(ctl, cfg, pass_ok, clock):
+    """Write pass_snapshot() to snapshot_path() atomically, with
+    `written_at` (epoch s) and `pass_ok`; remove a stale one when the pass
+    read nothing. Returns the path written, or None."""
+    path = snapshot_path(cfg.state_file)
+    data = pass_snapshot(ctl, cfg)
+    if data is None:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        return None
+    data.update(written_at=int(clock()), pass_ok=bool(pass_ok))
+    write_json_atomic(path, data, prefix=".status-")
+    return path
 
 
 def status_lines(s):
