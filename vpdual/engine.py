@@ -79,6 +79,7 @@ from datetime import datetime, timezone
 from .agent import (AGENT_IMAGE, AgentError, DockerHost, PARALON_IMAGE_PREFIX, PARALON_NAME_PREFIX,
                     PIN_PREFIX, RENTAL, VAST_NAME_RE, agent_of, leftovers)
 from .config import REQUIRED_PRICES
+from .notify import Notifier
 from .paralon import ParalonError
 from .state import MAX_DECISIONS, MODES
 from .vast import VastError
@@ -154,6 +155,8 @@ class Controller:
         # state each pass and publishes the status snapshot; it saves a mode
         # change but never a took-off flag (nothing was taken off).
         self.armed = getattr(cfg, "armed", True)
+        command = getattr(cfg, "notify_command", "")
+        self.notifier = Notifier(command, clock=clock) if command else None
         self.clock = clock
         self.state = store.load([m.vast_machine_id for m in cfg.machines])
         self._dirty = False
@@ -206,6 +209,8 @@ class Controller:
         prefix = ("DRY-RUN would: " if self.dry_run else
                   "NOT ARMED: would " if not self.armed else "") if would else ""
         log.log(level, "[%s] %s%s", machine.vast_machine_id, prefix, msg)
+        if level >= logging.WARNING and self._notifying:
+            self.notifier.warning(machine.vast_machine_id, msg)
         self.pass_decisions.append((machine.vast_machine_id, msg))
         now = datetime.fromtimestamp(self.clock(), timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ")
@@ -217,6 +222,12 @@ class Controller:
             decisions.append({"t": now, "msg": msg})
             del decisions[:-MAX_DECISIONS]
         self._dirty = True
+
+    @property
+    def _notifying(self):
+        """v0.8.0: the hook runs for real passes only: never a dry run, nor
+        `status` / the web UI (both read through a dry-run Controller)."""
+        return self.notifier is not None and not self.dry_run
 
     def _save(self, force=False):
         """`force`: an unarmed controller saves a mode change, nothing else."""
@@ -353,6 +364,10 @@ class Controller:
                   "state=%s available=%s spot=%s", m.vast_machine_id,
                   vm.listed, vm.running, vm.resident, node.state,
                   node.available, node.spot)
+        if self._notifying:
+            label = m.name or str(m.vast_machine_id)
+            self.notifier.seen(m.vast_machine_id, "vast", vm.listed, label)
+            self.notifier.seen(m.vast_machine_id, "paralon", node.available, label)
 
         if mode == "dual" and not node.spot:
             self._warn_on_demand(m)

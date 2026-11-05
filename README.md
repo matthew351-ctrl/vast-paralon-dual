@@ -482,6 +482,8 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | key | meaning |
 | --- | --- |
 | `on_paralon_rental` | `unlist_vast` (default) or `keep_vast_listed` |
+| `armed` | `false` = every decision is logged as `NOT ARMED: would ...` and nothing is changed on Vast, Paralon or Docker (`init` writes `false`); `true` = act. Left out = `true`, so a config from before v0.8.0 keeps working. `arm` or the Settings tab sets it |
+| `notify_command` | optional shell command run for warnings and confirmed side changes (see Notifications) |
 | `machines` | list of `{vast_machine_id, paralon_node_id}`, each with an optional `paralon_agent` and an optional `vast_listing` that overrides the top-level one |
 | `machines[].name` | optional label for people (up to 64 characters), shown by `status` and the web UI. Left out, the hostname Vast reports for the machine is shown, else the Vast machine id. Only a label: commands and the web UI's switch still use the Vast machine id |
 | `machines[].paralon_agent` | how to run `docker` on that machine: `local`, or `user@host` for ssh (key login, `BatchMode`; the user must be in the `docker` group). **Required for the protections**: renter detection from the machine's own containers, `docker_events`, stopping Paralon's agent and its leftovers during Vast rentals, stopping your idle job during Paralon rentals, and the GPU-free waits before the agent starts and before Vast is relisted. Left out, the tool has only Vast's running count and Paralon's API on a 60 s pass |
@@ -510,6 +512,42 @@ budget; `status` is one `GET /nodes`.
 
 The key comes from `PARALON_API_KEY`, or else from the `env` file next to
 the config. It is never logged.
+
+## Notifications
+
+Set `notify_command` to a shell command and it runs for every WARNING-level
+decision (a hold, a failed write, a relist Vast will not accept) and every
+confirmed side change: a read showing Vast listed or unlisted, or the
+Paralon node available or paused, where the last read showed the opposite
+(whoever made the change). The message is on its stdin; the environment adds
+`VPDUAL_MACHINE` (the Vast machine id), `VPDUAL_LEVEL` (`WARNING` or `INFO`)
+and `VPDUAL_EVENT` (e.g. `vast_unlisted`, `paralon_available`,
+`relist_held`).
+
+It runs as the service's user, with a 20 s limit, on its own thread: a slow
+or failing command never holds a pass (a failure is logged at most once per
+10 min). At most one notification per machine per event kind per 10 min; a
+held relist (no price to relist with) is repeated every hour until it
+clears. Nothing is sent by a dry run, `status` or the web UI.
+
+ntfy (a topic on ntfy.sh or your own server):
+
+```json
+"notify_command": "curl -fsS -H \"Title: vast-paralon-dual $VPDUAL_EVENT\" -d @- https://ntfy.sh/YOUR-PRIVATE-TOPIC"
+```
+
+Telegram (a bot token and your chat id; keep the config readable by you only
+if it holds the token, or put the command in a script under `~/bin`):
+
+```json
+"notify_command": "curl -fsS https://api.telegram.org/botYOUR_BOT_TOKEN/sendMessage -d chat_id=YOUR_CHAT_ID --data-urlencode text@-"
+```
+
+Mail (any `mail`/`mailx` with a working local MTA):
+
+```json
+"notify_command": "mail -s \"vast-paralon-dual: machine $VPDUAL_MACHINE $VPDUAL_EVENT\" you@example.com"
+```
 
 ## Service
 

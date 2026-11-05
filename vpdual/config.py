@@ -111,6 +111,9 @@ class Config:
     # `init` writes false; a config without the key (any install from before
     # v0.8.0) is armed, so it keeps working unchanged.
     armed: bool = True
+    # v0.8.0: a shell command run for warnings and confirmed side changes
+    # (notify.py); "" = none.
+    notify_command: str = ""
     paralon_api_key: str = field(default="", repr=False)  # never printed
 
     def machine(self, vast_machine_id):
@@ -262,6 +265,9 @@ def check_config(raw, env=None):
     if not isinstance(imgs, list) or not all(isinstance(i, str) and i for i in imgs):
         err("idle_job_images",
             "\"idle_job_images\" must be a list of image name prefixes")
+    if not isinstance(kwargs.get("notify_command", ""), str):
+        err("notify_command", "\"notify_command\" must be a string (a shell "
+            "command; the message is on its stdin)")
     for key in STR_SETTINGS:
         if key in kwargs and (not isinstance(kwargs[key], str) or not kwargs[key]):
             err(key, f"\"{key}\" must be a non-empty string")

@@ -47,7 +47,8 @@ _BACKUP_RE = re.compile(r"\.bak-\d{8}-\d{6}(-\d+)?$")
 # machines list are handled on their own).
 GROUPS = [
     ("General", ["armed", "on_paralon_rental", "poll_interval_s", "fast_poll_s",
-                 "docker_events", "gpu_free_mib", "idle_job_images"]),
+                 "docker_events", "gpu_free_mib", "idle_job_images",
+                 "notify_command"]),
     ("Vast", ["vastai_bin"]),
     ("Paralon", ["paralon_base_url", "paralon_min_get_interval_s",
                  "paralon_max_calls_per_min", "reclaim_retry_s",
