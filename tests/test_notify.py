@@ -73,8 +73,8 @@ class NotifyTests(TempDirMixin, unittest.TestCase):
         self.assertEqual(len(r.calls), 2)
 
     def test_held_relist_repeats_hourly(self):
-        n, r = notify.Notifier("x", clock=lambda: self.t, runner=Runner(),
-                               spawn=lambda fn: fn()), None
+        n = notify.Notifier("x", clock=lambda: self.t, runner=Runner(),
+                            spawn=lambda fn: fn())
         self.t = 0.0
         msg = "hold: cannot relist Vast: no saved price"
         n.warning(111, msg)

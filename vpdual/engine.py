@@ -490,7 +490,8 @@ class Controller:
             # Vast renter arrives -- waiting on it could hold Vast off forever.
             return None
         if machine.gpu_free(self.cfg.gpu_free_mib, self.cfg.idle_job_images) is not True:
-            return f"the Paralon rental has ended but the GPU is not free yet ({machine.gpu_text()})"
+            return ("the Paralon rental has ended but the GPU is not free yet "
+                    f"({machine.gpu_text()})")
         return None
 
     def _track_recovery(self, m, vast_renter, node, vast_held=False):
@@ -627,7 +628,8 @@ class Controller:
         if last is None:
             # first sight of a stopped agent: wait a few minutes so a Vast
             # hand-over settles before any pull
-            self._jupyter_refresh[m.vast_machine_id] = (now - self.cfg.jupyter_refresh_s + 300, None)
+            self._jupyter_refresh[m.vast_machine_id] = (
+                now - self.cfg.jupyter_refresh_s + 300, None)
             return
         if now - last < self.cfg.jupyter_refresh_s:
             return
@@ -703,7 +705,8 @@ class Controller:
             if machine is not None else None
         if free is not True:
             self._decide(m, "Vast renter gone; waiting for the GPU to be free "
-                         f"before starting the Paralon agent ({machine.gpu_text() if machine else 'machine unread'})")
+                         "before starting the Paralon agent "
+                         f"({machine.gpu_text() if machine else 'machine unread'})")
             return True
         self._decide(m, "no Vast renter and the GPU is free: start the Paralon agent")
         return self._docker_write(m, "start", agent.id)

@@ -280,7 +280,8 @@ class Bursts(Base):
     def test_paralon_container_start_bursts_without_a_pause(self):
         v, p = FakeVast(), FakeParalon(available=True)
         c = self.ctl(v, p)
-        self.assertFalse(c.container_started(None, "jupyter-1", "ghcr.io/paraloncloud/jupyter:latest"))
+        self.assertFalse(c.container_started(None, "jupyter-1",
+                                             "ghcr.io/paraloncloud/jupyter:latest"))
         self.assertTrue(c.bursting)
         self.assertNotIn(OFF, p.writes)
 

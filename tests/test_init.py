@@ -86,7 +86,8 @@ class Init(TempDirMixin, unittest.TestCase):
 
     def test_interactive_writes_a_valid_config(self):
         node = fixture("fixture_paralon_nodes.json")["nodes"][0]["id"]
-        ask = Answers("", "1", "")        # Enter = unlist_vast (default); 12345 -> node 1; agent skip
+        # Enter = unlist_vast (default); 12345 -> node 1; agent skip
+        ask = Answers("", "1", "")
         args = init_args(self.cfg_path)
         code = self.run_init(args, ask=ask)
         self.assertEqual(code, 0, self.out)

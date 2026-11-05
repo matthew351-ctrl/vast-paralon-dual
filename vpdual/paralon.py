@@ -18,9 +18,9 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
-log = logging.getLogger("vpdual.paralon")
-
 from . import __version__
+
+log = logging.getLogger("vpdual.paralon")
 
 USER_AGENT = f"vast-paralon-dual/{__version__}"
 BACKOFF_BASE_S = 30

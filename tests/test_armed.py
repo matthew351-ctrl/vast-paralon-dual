@@ -115,8 +115,8 @@ class ArmCommand(TempDirMixin, unittest.TestCase):
 class SettingsArming(SettingsBase):
     def test_banner_is_on_the_page(self):
         self.assertIn('id="not-armed"', PAGE)
-        self.assertIn("Not armed: decisions are logged, nothing is changed. "
-                      "Arm it in Settings.", PAGE)
+        self.assertIn('"Not armed: decisions are logged, " +\n'
+                      '         "nothing is changed. Arm it in Settings."', PAGE)
 
     def test_arming_in_settings_runs_doctor(self):
         self.start()

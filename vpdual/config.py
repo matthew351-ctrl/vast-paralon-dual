@@ -99,13 +99,15 @@ class Config:
     poll_interval_s: int = 60
     paralon_base_url: str = "https://paraloncloud.com/api/v1"
     paralon_min_get_interval_s: int = 120
-    paralon_max_calls_per_min: int = 6   # 4 until v0.4.7: a 30 s burst read left a write no room in its minute
+    # 4 until v0.4.7: a 30 s burst read left a write no room in its minute
+    paralon_max_calls_per_min: int = 6
     reclaim_retry_s: int = 300
     vastai_bin: str = "vastai"
     docker_events: bool = True     # act on container starts at once
     gpu_free_mib: int = 500         # "GPU free" = no compute process and <= this
     fast_poll_s: int = 5            # pass interval while a machine is recovering
-    jupyter_refresh_s: int = 3600   # pull Paralon's Jupyter image this often while the agent is stopped
+    # pull Paralon's Jupyter image this often while the agent is stopped
+    jupyter_refresh_s: int = 3600
     idle_job_images: list = field(default_factory=list)   # the host's own idle job
     # v0.8.0: false = decide and log ("NOT ARMED: would ..."), write nothing.
     # `init` writes false; a config without the key (any install from before

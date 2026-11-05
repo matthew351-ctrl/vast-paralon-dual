@@ -1781,7 +1781,8 @@ function render(s) {
   hideTip();
   $("policy").textContent = s.policy;
   $("version").textContent = "vast-paralon-dual " + s.version;
-  banner("not-armed", s.armed === false ? "Not armed: decisions are logged, nothing is changed. Arm it in Settings." : null);
+  banner("not-armed", s.armed === false ? "Not armed: decisions are logged, " +
+         "nothing is changed. Arm it in Settings." : null);
   banner("dry-run", s.dry_run ? "Dry run (--dry-run): mode switches are " +
          "not saved." : null);
   banner("read-error", s.read_error !== null ? "Cannot read both sides, " +
