@@ -22,8 +22,15 @@ apart, but the service's Paralon call budget, its error back-off and its
 just-sent guards live in its own process, and a second process acting on
 Vast/Paralon would not see them. One writer stays one writer.
 
-Protection (there is no login; the page can switch modes and edit the
-config):
+Protection (the page can switch modes and edit the config):
+  - v0.7.0: an optional password login (env VPDUAL_UI_PASSWORD; `Auth`):
+    GET /login is a form with a pre-login CSRF cookie, POST /login checks
+    the password (constant-time; 1 s delay on a failure; 5 failures lock that
+    IP out for 5 min) and sets a session cookie (random 256-bit, HttpOnly,
+    SameSite=Strict, 12 h, in memory: a restart logs everyone out), POST
+    /logout ends it. With a password set, / and every /api/* need a session
+    and every POST still needs the token below. `ui --host <not loopback>`
+    REFUSES to start without the password unless --no-login is given;
   - binds 127.0.0.1 by default; any other address prints a warning;
   - the Host header must be an IP address, `localhost` or this machine's own
     name, so a DNS-rebinding web page cannot load the page or its token;
@@ -40,6 +47,7 @@ replaced with [redacted] before it is sent.
 """
 
 import hmac
+import html
 import ipaddress
 import json
 import logging
@@ -52,8 +60,9 @@ import socketserver
 import sys
 import threading
 import time
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
 from . import pairing, settings
@@ -78,7 +87,17 @@ TOKEN_HEADER = "X-VPDual-Token"
 MAX_BODY = 4096
 DRAIN_MAX = 65536         # bytes read from a refused body at most
 POST_LIMITS = {"/api/mode": MAX_BODY, "/api/config/check": settings.MAX_CONFIG_BODY,
-               "/api/config": settings.MAX_CONFIG_BODY}
+               "/api/config": settings.MAX_CONFIG_BODY,
+               "/login": MAX_BODY, "/logout": MAX_BODY}
+# v0.7.0 login (see Auth)
+PASSWORD_ENV = "VPDUAL_UI_PASSWORD"
+SESSION_COOKIE = "vpdual_session"
+PRE_COOKIE = "vpdual_login"        # the login form's CSRF value, before a session
+SESSION_TTL_S = 12 * 3600
+PRE_TTL_S = 900
+LOCKOUT_FAILS = 5
+LOCKOUT_S = 300
+FAIL_DELAY_S = 1.0
 REDACTED = "[redacted]"
 _SECRET_RE = re.compile(r"(?i)(api[_-]?key=|bearer\s+)[^\s&\"'\\]+")
 
@@ -92,16 +111,89 @@ def is_loopback(host):
         return False
 
 
-def bind_warning(host, port):
+def bind_warning(host, port, login=False):
     """The warning for a non-loopback address, or None."""
     if is_loopback(host):
         return None
+    tunnel = ("Prefer the default 127.0.0.1 and an SSH tunnel from your "
+              f"other device: ssh -L {port}:127.0.0.1:{port} <you>@<this host>")
+    if login:
+        return (f"WARNING: the web UI listens on {host}:{port}, not on "
+                "loopback. A login is required, but this is plain HTTP: the "
+                "password and session cross your network unencrypted. " + tunnel)
     return (f"WARNING: the web UI listens on {host}:{port}, not on loopback. "
             "Anyone who can reach that address on your network can open the "
             "page, SWITCH MODES (unlist Vast, pause Paralon) and EDIT THE "
-            "CONFIG: there is no "
-            "login. Prefer the default 127.0.0.1 and an SSH tunnel from your "
-            f"other device: ssh -L {port}:127.0.0.1:{port} <you>@<this host>")
+            f"CONFIG: there is no login (set {PASSWORD_ENV} to require a "
+            "login). " + tunnel)
+
+
+class Auth:
+    """v0.7.0: the optional password login. Sessions and failures live in
+    memory: a restart logs everyone out, the safe direction. With no
+    password `required` is False and every request is let through, as
+    before."""
+
+    def __init__(self, password=None, *, clock=time.time, sleep=time.sleep):
+        self.password = password or None
+        self.clock, self.sleep = clock, sleep
+        self._sessions = {}           # session id -> expiry (epoch s)
+        self._fails = {}              # ip -> recent failure times
+        self._locked = {}             # ip -> locked out until (epoch s)
+        self._lock = threading.Lock()
+
+    @property
+    def required(self):
+        return self.password is not None
+
+    def valid(self, sid):
+        if not self.required:
+            return True
+        if not sid:
+            return False
+        with self._lock:
+            exp = self._sessions.get(sid)
+            if exp is None or exp <= self.clock():
+                self._sessions.pop(sid, None)
+                return False
+            return True
+
+    def locked_out(self, ip):
+        with self._lock:
+            return self.clock() < self._locked.get(ip, 0)
+
+    def check(self, ip, given):
+        """The password, constant-time. LOCKOUT_FAILS failures within
+        LOCKOUT_S lock `ip` out for LOCKOUT_S (a right password included)."""
+        if not self.required or self.locked_out(ip):
+            return False
+        ok = hmac.compare_digest(given.encode("utf-8", "replace"),
+                                 self.password.encode("utf-8"))
+        with self._lock:
+            now = self.clock()
+            if ok:
+                self._fails.pop(ip, None)
+                return True
+            recent = [t for t in self._fails.get(ip, ())
+                      if now - t < LOCKOUT_S] + [now]
+            if len(recent) >= LOCKOUT_FAILS:
+                self._locked[ip], recent = now + LOCKOUT_S, []
+            self._fails[ip] = recent
+            self._locked = {k: v for k, v in self._locked.items() if v > now}
+        return False
+
+    def new_session(self):
+        sid = secrets.token_urlsafe(32)               # 256 random bits
+        with self._lock:
+            now = self.clock()
+            self._sessions = {k: v for k, v in self._sessions.items()
+                              if v > now}
+            self._sessions[sid] = now + SESSION_TTL_S
+        return sid
+
+    def drop(self, sid):
+        with self._lock:
+            self._sessions.pop(sid or "", None)
 
 
 def _hostname(host_header):
@@ -143,8 +235,9 @@ class UIApp:
 
     def __init__(self, cfg, vast, paralon, *, dry_run=False, docker=DockerHost,
                  clock=time.time, monotonic=time.monotonic, config_path=None,
-                 rebuild=None, environ=None):
+                 rebuild=None, environ=None, password=None):
         self.cfg = cfg
+        self.auth = Auth(password)        # v0.7.0: no password = no login
         self.config_path = config_path    # the Settings tab edits this file
         self.rebuild = rebuild            # cfg -> (vast, paralon) after a save
         self.environ = environ            # where the key came from (tests)
@@ -455,13 +548,70 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(data)
 
-    def _json(self, code, obj):
+    def _json(self, code, obj, headers=()):
         # <, > and & only occur inside JSON strings: escaped there, a name
         # like "<img onerror=...>" cannot read as markup even if sniffed.
         text = self.app.redact(json.dumps(obj, sort_keys=True))
         text = text.replace("<", "\\u003c").replace(">", "\\u003e") \
                    .replace("&", "\\u0026")
-        self._send(code, text, "application/json; charset=utf-8")
+        self._send(code, text, "application/json; charset=utf-8", headers)
+
+    def _redirect(self, where, headers=()):
+        self._send(303, "", "text/plain; charset=utf-8",
+                   [("Location", where), *headers])
+
+    @staticmethod
+    def _cookie_header(name, value, max_age):
+        return ("Set-Cookie", f"{name}={value}; Max-Age={max_age}; Path=/; "
+                "HttpOnly; SameSite=Strict")
+
+    def _cookie(self, name):
+        jar = SimpleCookie()
+        try:
+            jar.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return None
+        morsel = jar.get(name)
+        return morsel.value if morsel else None
+
+    def _session_ok(self):
+        return self.app.auth.valid(self._cookie(SESSION_COOKIE))
+
+    def _login_page(self, msg="", code=200):
+        nonce, pre = secrets.token_urlsafe(16), secrets.token_urlsafe(24)
+        page = (LOGIN_PAGE.replace("__NONCE__", nonce).replace("__CSRF__", pre)
+                .replace("__MSG__", f'<p class="err" role="alert">'
+                         f'{html.escape(msg)}</p>' if msg else ""))
+        csp = (f"default-src 'none'; style-src 'nonce-{nonce}'; "
+               "form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self._send(code, page, "text/html; charset=utf-8",
+                   [("Content-Security-Policy", csp),
+                    self._cookie_header(PRE_COOKIE, pre, PRE_TTL_S)])
+
+    def _login(self, body):
+        """POST /login (a form post from the login page)."""
+        auth = self.app.auth
+        if not auth.required:
+            return self._redirect("/")
+        form = parse_qs((body or b"").decode("utf-8", "replace"))
+        pre = self._cookie(PRE_COOKIE) or ""
+        sent = (form.get("csrf") or [""])[0]
+        if not pre or not hmac.compare_digest(pre.encode("utf-8", "replace"),
+                                              sent.encode("utf-8", "replace")):
+            return self._login_page("The login form expired: try again.", 403)
+        ip = self.client_address[0]
+        if auth.locked_out(ip):
+            return self._login_page("Too many failed attempts: wait 5 minutes "
+                                    "and try again.", 429)
+        if not auth.check(ip, (form.get("password") or [""])[0]):
+            auth.sleep(FAIL_DELAY_S)
+            log.warning("ui: failed login from %s", ip)
+            return self._login_page("Wrong password.", 401)
+        log.info("ui: login from %s", ip)
+        return self._redirect("/", [
+            self._cookie_header(SESSION_COOKIE, auth.new_session(),
+                                SESSION_TTL_S),
+            self._cookie_header(PRE_COOKIE, "", 0)])
 
     # -- checks --------------------------------------------------------
     def _host_ok(self):
@@ -491,10 +641,21 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return
         path = urlsplit(self.path).path
+        if path == "/login":
+            if not self.app.auth.required:
+                return self._redirect("/")
+            return self._login_page()
+        if not self._session_ok():
+            if path == "/":
+                return self._redirect("/login")
+            return self._json(401, _err("login required: open the page and "
+                                        "log in"))
         if path == "/":
             nonce = secrets.token_urlsafe(16)
             page = PAGE.replace("__TOKEN__", self.app.token) \
-                       .replace("__NONCE__", nonce)
+                       .replace("__NONCE__", nonce) \
+                       .replace("__LOGIN__", "1" if self.app.auth.required
+                                else "0")
             csp = ("default-src 'none'; "
                    f"script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
                    "connect-src 'self'; img-src data:; base-uri 'none'; "
@@ -539,9 +700,18 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json(404, _err("not found"))
         if not self._same_origin():
             return self._json(403, _err("cross-origin request refused"))
+        if path == "/login":
+            return self._login(body)
+        if not self._session_ok():
+            return self._json(401, _err("login required: open the page and "
+                                        "log in"))
         if not self._token_ok():
             return self._json(403, _err("missing or wrong token: reload the "
                                         "page (it changes when `ui` restarts)"))
+        if path == "/logout":
+            self.app.auth.drop(self._cookie(SESSION_COOKIE))
+            return self._json(200, {"ok": True},
+                              [self._cookie_header(SESSION_COOKIE, "", 0)])
         ctype = self.headers.get("Content-Type", "").split(";")[0]
         if ctype.strip().lower() != "application/json":
             return self._json(415, _err("send Content-Type: application/json"))
@@ -582,15 +752,24 @@ def make_server(app, host=DEFAULT_HOST, port=DEFAULT_PORT):
 
 
 def serve(cfg, vast, paralon, *, host=DEFAULT_HOST, port=DEFAULT_PORT,
-          dry_run=False, docker=DockerHost, config_path=None, rebuild=None):
+          dry_run=False, docker=DockerHost, config_path=None, rebuild=None,
+          password=None, no_login=False):
+    if not is_loopback(host) and not password and not no_login:
+        # v0.7.0: off loopback, a page anyone on the network can drive is
+        # opt-in, not a default reached by one --host flag.
+        print(f"error: refusing to listen on {host}:{port} without a login: "
+              f"set {PASSWORD_ENV} to require one, or pass --no-login to "
+              "accept that anyone who can reach it can switch modes and edit "
+              "the config", file=sys.stderr)
+        return 2
     app = UIApp(cfg, vast, paralon, dry_run=dry_run, docker=docker,
-                config_path=config_path, rebuild=rebuild)
+                config_path=config_path, rebuild=rebuild, password=password)
     try:
         server = make_server(app, host, port)
     except OSError as exc:
         print(f"error: cannot listen on {host}:{port}: {exc}", file=sys.stderr)
         return 2
-    warning = bind_warning(host, port)
+    warning = bind_warning(host, port, login=bool(password))
     if warning:
         print(warning, file=sys.stderr, flush=True)
         log.warning("web UI on a non-loopback address %s:%s", host, port)
@@ -598,8 +777,8 @@ def serve(cfg, vast, paralon, *, host=DEFAULT_HOST, port=DEFAULT_PORT,
              if host in ("0.0.0.0", "::", "") else
              f"[{host.strip('[]')}]" if ":" in host else host)
     print(f"web UI: http://{shown}:{server.server_address[1]}/ "
-          f"(Ctrl+C to stop){'; dry run, modes are not saved' if dry_run else ''}",
-          flush=True)
+          f"(Ctrl+C to stop){'; dry run, modes are not saved' if dry_run else ''}"
+          f"; login {'required' if password else 'off'}", flush=True)
 
     def stop(*_):
         raise KeyboardInterrupt
@@ -622,6 +801,7 @@ PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="vpdual-token" content="__TOKEN__">
+<meta name="vpdual-login" content="__LOGIN__">
 <title>Vast + Paralon</title>
 <link rel="icon" href="data:,">
 <script nonce="__NONCE__">
@@ -905,6 +1085,7 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
       <button type="button" id="view-table" aria-pressed="false">Table</button>
     </span>
     <button id="refresh" type="button">Refresh</button>
+    <button id="logout" type="button" hidden>Log out</button>
     <span class="seg theme" role="group" aria-label="Colours">
       <button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
       <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
@@ -1613,6 +1794,7 @@ async function load() {
   try {
     const r = await fetch("/api/status", {cache: "no-store",
                                           headers: {"Accept": "application/json"}});
+    if (r.status === 401) { location.href = "/login"; return; }
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.error || "HTTP " + r.status);
     last = j; lastAt = Date.now();
@@ -1675,6 +1857,16 @@ $("confirm").addEventListener("close", () => {
 });
 $("s-confirm").addEventListener("close", hideTip);
 $("refresh").addEventListener("click", load);
+// v0.7.0: with a login, a Log out button; an expired session goes to /login
+if (document.querySelector('meta[name="vpdual-login"]').content === "1") {
+  $("logout").hidden = false;
+  $("logout").addEventListener("click", async () => {
+    try {
+      await fetch("/logout", {method: "POST", body: "{}",
+        headers: {"Content-Type": "application/json", "X-VPDual-Token": TOKEN}});
+    } finally { location.href = "/login"; }
+  });
+}
 $("view-cards").addEventListener("click", () => setView("cards"));
 $("view-table").addEventListener("click", () => setView("table"));
 document.addEventListener("visibilitychange", () => {
@@ -2224,6 +2416,52 @@ try {
 setView(view);
 setTab(tab);
 </script>
+</body>
+</html>
+"""
+
+
+LOGIN_PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Vast + Paralon: log in</title>
+<style nonce="__NONCE__">
+:root { --bg: #f4f6f9; --card: #fff; --fg: #14202e; --line: #cfd6df;
+  --accent: #1f6feb; --accent-fg: #fff; --bad: #b42318; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0e1116; --card: #161b22;
+  --fg: #e6edf3; --line: #3d4450; --accent: #58a6ff; --accent-fg: #0e1116;
+  --bad: #ff7b72; } }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+  background: var(--bg); color: var(--fg); font: 15px/1.4 system-ui, sans-serif; }
+form { background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; padding: 24px; box-sizing: border-box;
+  width: min(340px, calc(100vw - 32px)); }
+h1 { font-size: 1.2rem; margin: 0 0 16px; }
+label { display: block; margin-bottom: 8px; }
+input { width: 100%; box-sizing: border-box; min-height: 44px;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--fg); font-size: 16px; }
+button { margin-top: 16px; width: 100%; min-height: 44px; border: 0;
+  border-radius: 8px; background: var(--accent); color: var(--accent-fg);
+  font-size: 15px; font-weight: 600; cursor: pointer; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent);
+  outline-offset: 2px; }
+.err { color: var(--bad); margin: 12px 0 0; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Vast + Paralon</h1>
+  <label for="pw">Password</label>
+  <input id="pw" name="password" type="password"
+    autocomplete="current-password" autofocus required>
+  <input type="hidden" name="csrf" value="__CSRF__">
+  <button type="submit">Log in</button>
+  __MSG__
+</form>
 </body>
 </html>
 """

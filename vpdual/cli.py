@@ -18,7 +18,7 @@ from .paralon import ParalonClient
 from .state import MODES, StateStore
 from .status import publish_snapshot, status_data, status_lines
 from .vast import VastCLI
-from .webui import DEFAULT_HOST, DEFAULT_PORT, serve
+from .webui import DEFAULT_HOST, DEFAULT_PORT, PASSWORD_ENV, serve
 
 log = logging.getLogger("vpdual")
 
@@ -123,10 +123,11 @@ def cmd_status(ctl, cfg, machine_id, out=print):
     return 0
 
 
-def cmd_ui(ctl, cfg, host, port, cfg_path=None):
+def cmd_ui(ctl, cfg, host, port, cfg_path=None, no_login=False):
     return serve(cfg, ctl.vast, ctl.paralon, host=host, port=port,
                  dry_run=ctl.dry_run, docker=ctl.docker, config_path=cfg_path,
-                 rebuild=clients)
+                 rebuild=clients, no_login=no_login,
+                 password=os.environ.get(PASSWORD_ENV) or None)
 
 
 def build_parser():
@@ -160,6 +161,9 @@ def build_parser():
                         "this machine only)")
     u.add_argument("--port", type=int, default=DEFAULT_PORT,
                    help=f"port (default {DEFAULT_PORT})")
+    u.add_argument("--no-login", action="store_true",
+                   help=f"allow a non-loopback --host without {PASSWORD_ENV} "
+                        "(anyone who can reach it can switch modes)")
     sub.add_parser("service", help="print the systemd unit for this account")
     return p
 
@@ -194,7 +198,8 @@ def main(argv=None):
         if args.cmd == "mode":
             return cmd_mode(ctl, args.mode, args.machine)
         if args.cmd == "ui":
-            return cmd_ui(ctl, cfg, args.host, args.port, cfg_path)
+            return cmd_ui(ctl, cfg, args.host, args.port, cfg_path,
+                          no_login=args.no_login)
         return cmd_status(ctl, cfg, args.machine)
     except ValueError as exc:      # unknown machine id
         print(f"error: {exc}", file=sys.stderr)

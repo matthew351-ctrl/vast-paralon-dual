@@ -1,20 +1,27 @@
 """v0.7.0 review fixes: the `run` service's status snapshot the web UI
 serves (item 1)."""
 
+import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from urllib.parse import urlencode
 
-from vpdual.cli import publish_status
+from vpdual.cli import build_parser, publish_status
 from vpdual.engine import RELIST_BACKOFF_S, RELIST_FAST_TRIES, Controller
 from vpdual.state import StateStore
 from vpdual.status import snapshot_path
-from vpdual.webui import SNAPSHOT_MAX_AGE_PASSES, UIApp
+from vpdual.webui import (LOCKOUT_FAILS, LOCKOUT_S, PASSWORD_ENV,
+                          SNAPSHOT_MAX_AGE_PASSES, TOKEN_HEADER, Auth, UIApp,
+                          bind_warning, serve)
 
 from helpers import FakeParalon, FakeVast, TempDirMixin, make_config
 from status_scenario import build_scenario
+from test_webui import Server
 
 
 class Snapshot(unittest.TestCase):
@@ -168,6 +175,132 @@ class RelistBackoff(TempDirMixin, unittest.TestCase):
         bad = _clean(raw)
         self.assertEqual((bad["relist_attempts"], bad["relist_next_at"]),
                          (0, None))
+
+
+PW = "synthetic-test-password"
+
+
+class Login(Server):
+    def start(self, **kw):
+        super().start(**kw)
+        self.t = [5000.0]
+        self.slept = []
+        self.app.auth = Auth(PW, clock=lambda: self.t[0],
+                             sleep=self.slept.append)
+
+    def login_form(self):
+        resp, text = self.request("GET", "/login")
+        self.assertEqual(resp.status, 200)
+        pre = re.search(r'name="csrf" value="([^"]+)"', text).group(1)
+        self.assertIn(f"vpdual_login={pre}", resp.getheader("Set-Cookie"))
+        return pre
+
+    def post_login(self, password, pre=None):
+        pre = pre or self.login_form()
+        body = urlencode({"password": password, "csrf": pre}).encode()
+        return self.request("POST", "/login", body, {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": f"http://127.0.0.1:{self.port}",
+            "Cookie": f"vpdual_login={pre}"})
+
+    def session(self):
+        resp, _ = self.post_login(PW)
+        self.assertEqual((resp.status, resp.getheader("Location")), (303, "/"))
+        cookie = resp.getheader("Set-Cookie")
+        for attr in ("HttpOnly", "SameSite=Strict", f"Max-Age={12 * 3600}"):
+            self.assertIn(attr, cookie)
+        sid = re.search(r"vpdual_session=([^;]+)", cookie).group(1)
+        self.assertGreaterEqual(len(sid), 43)          # 256 bits, base64
+        return f"vpdual_session={sid}"
+
+    def test_login_required_when_set(self):
+        self.start()
+        resp, _ = self.request("GET", "/")
+        self.assertEqual((resp.status, resp.getheader("Location")),
+                         (303, "/login"))
+        for path in ("/api/status", "/api/config", "/api/discover"):
+            self.assertEqual(self.request("GET", path)[0].status, 401, path)
+        cookie = self.session()
+        resp, text = self.request("GET", "/", headers={"Cookie": cookie})
+        self.assertEqual(resp.status, 200)
+        self.assertIn('name="vpdual-login" content="1"', text)
+        self.assertEqual(self.request("GET", "/api/status",
+                                      headers={"Cookie": cookie})[0].status, 200)
+        self.t[0] += 12 * 3600                         # the session expires
+        self.assertEqual(self.request("GET", "/api/status",
+                                      headers={"Cookie": cookie})[0].status, 401)
+
+    def test_post_without_session_is_401_and_token_still_needed(self):
+        self.start()
+        code, _ = self.post_mode({"machine": 111, "mode": "vast"})
+        self.assertEqual(code, 401)
+        cookie = self.session()
+        code, _ = self.post_mode({"machine": 111, "mode": "vast"}, token=False,
+                                 extra={"Cookie": cookie})
+        self.assertEqual(code, 403)
+        code, j = self.post_mode({"machine": 111, "mode": "vast"},
+                                 extra={"Cookie": cookie})
+        self.assertEqual((code, j["saved"]), (200, True))
+
+    def test_logout_ends_the_session(self):
+        self.start()
+        cookie = self.session()
+        resp, _ = self.request("POST", "/logout", b"{}", {
+            "Cookie": cookie, TOKEN_HEADER: self.app.token,
+            "Content-Type": "application/json"})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.request("GET", "/api/status",
+                                      headers={"Cookie": cookie})[0].status, 401)
+
+    def test_wrong_password_delays_then_locks_out(self):
+        self.start()
+        for _ in range(LOCKOUT_FAILS):
+            self.assertEqual(self.post_login("wrong")[0].status, 401)
+        self.assertEqual(self.slept, [1.0] * LOCKOUT_FAILS)
+        resp, text = self.post_login(PW)               # right, but locked
+        self.assertEqual(resp.status, 429)
+        self.assertIn("wait 5 minutes", text)
+        self.t[0] += LOCKOUT_S
+        self.assertEqual(self.post_login(PW)[0].status, 303)
+
+    def test_login_form_csrf_and_origin(self):
+        self.start()
+        pre = self.login_form()
+        body = urlencode({"password": PW, "csrf": pre}).encode()
+        resp, _ = self.request("POST", "/login", body, {
+            "Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual(resp.status, 403)             # no pre-login cookie
+        resp, _ = self.request("POST", "/login", body, {
+            "Cookie": f"vpdual_login={pre}", "Origin": "http://evil.example"})
+        self.assertEqual(resp.status, 403)             # cross-origin
+
+    def test_no_password_no_login(self):
+        super().start()                                # Auth(None)
+        self.assertEqual(self.request("GET", "/api/status")[0].status, 200)
+        self.assertEqual(self.request("GET", "/login")[0].status, 303)
+
+
+class NonLoopbackBind(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        self.cfg, _, self.vast, self.paralon, self.docker = build_scenario(tmp)
+
+    def test_refused_without_password(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = serve(self.cfg, self.vast, self.paralon, host="0.0.0.0",
+                         port=0, docker=self.docker)
+        self.assertEqual(code, 2)
+        self.assertIn(PASSWORD_ENV, err.getvalue())
+        self.assertIn("--no-login", err.getvalue())
+
+    def test_warning_names_the_env_var(self):
+        self.assertIn(PASSWORD_ENV, bind_warning("0.0.0.0", 8787))
+        self.assertIn("plain HTTP", bind_warning("0.0.0.0", 8787, login=True))
+        args = build_parser().parse_args(["ui", "--host", "0.0.0.0",
+                                          "--no-login"])
+        self.assertTrue(args.no_login)
 
 
 if __name__ == "__main__":
