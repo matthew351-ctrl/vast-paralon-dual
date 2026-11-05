@@ -147,6 +147,13 @@ class Controller:
         self.paralon = paralon
         self.store = store
         self.dry_run = dry_run
+        # v0.8.0: an unarmed config (`"armed": false`, what `init` writes)
+        # makes every decision but none of the writes -- no Vast list/unlist,
+        # no Paralon set_available or reclaim, no agent or idle-job
+        # start/stop, no Jupyter pin. Unlike a dry run it locks, re-reads the
+        # state each pass and publishes the status snapshot; it saves a mode
+        # change but never a took-off flag (nothing was taken off).
+        self.armed = getattr(cfg, "armed", True)
         self.clock = clock
         self.state = store.load([m.vast_machine_id for m in cfg.machines])
         self._dirty = False
@@ -166,6 +173,10 @@ class Controller:
         self._idle_stop_sent = {}     # machine id -> when `stop instance` was sent
 
     # -- bookkeeping ---------------------------------------------------
+    @property
+    def writes_off(self):
+        return self.dry_run or not self.armed
+
     @property
     def bursting(self):
         return self.clock() < self.burst_until
@@ -191,8 +202,9 @@ class Controller:
         return [m]
 
     def _decide(self, machine, msg, level=logging.INFO):
-        prefix = "DRY-RUN would: " if self.dry_run and level == logging.INFO \
-            and not msg.startswith(("hold", "ok")) else ""
+        would = level == logging.INFO and not msg.startswith(("hold", "ok"))
+        prefix = ("DRY-RUN would: " if self.dry_run else
+                  "NOT ARMED: would " if not self.armed else "") if would else ""
         log.log(level, "[%s] %s%s", machine.vast_machine_id, prefix, msg)
         self.pass_decisions.append((machine.vast_machine_id, msg))
         now = datetime.fromtimestamp(self.clock(), timezone.utc).strftime(
@@ -206,8 +218,9 @@ class Controller:
             del decisions[:-MAX_DECISIONS]
         self._dirty = True
 
-    def _save(self):
-        if self.dry_run:
+    def _save(self, force=False):
+        """`force`: an unarmed controller saves a mode change, nothing else."""
+        if self.dry_run or (not self.armed and not force):
             return
         self.store.save(self.state)
         self._dirty = False
@@ -245,7 +258,7 @@ class Controller:
             for m in self.targets(machine_id):
                 self.mstate(m)["mode"] = mode
                 self._decide(m, f"mode set to {mode}")
-            self._save()
+            self._save(force=True)
 
     # -- one pass ------------------------------------------------------
     def read(self, fresh_ok=True):
@@ -512,7 +525,7 @@ class Controller:
                 self.mstate(m)["took_off"]["paralon"] = True
                 self._save()          # the owed relist is on disk first
                 acted = True
-                if not self.dry_run:
+                if not self.writes_off:
                     try:
                         self.paralon.set_available(m.paralon_node_id, False)
                     except ParalonError as exc:
@@ -571,7 +584,7 @@ class Controller:
     def _pin_jupyter(self, m):
         """Keep Paralon's Jupyter image from Vast's image cleanup. A failure
         is logged and retried next pass; it never holds anything else."""
-        if self.dry_run:
+        if self.writes_off:
             return
         try:
             lines = self.docker(m.paralon_agent).pin_jupyter()
@@ -587,7 +600,7 @@ class Controller:
         """While the agent is stopped, pull Paralon's Jupyter image once every
         jupyter_refresh_s on a background thread (a changed image is ~9 GB;
         the pass never waits for it). The next pass's pin keeps it."""
-        if self.dry_run or machine is None:
+        if self.writes_off or machine is None:
             return
         agent = agent_of(machine.containers)
         if agent is not None and agent.running:
@@ -681,7 +694,7 @@ class Controller:
         return self._docker_write(m, "start", agent.id)
 
     def _docker_write(self, m, verb, arg, what="Paralon agent"):
-        if self.dry_run:
+        if self.writes_off:
             return True
         try:
             host = self.docker(m.paralon_agent)
@@ -774,7 +787,7 @@ class Controller:
             self._decide(m, f"Paralon rental running: stop the host's idle job "
                          f"(Vast instance {iid}) through Vast")
             self._owe_idle(m, "vast", iid, f"C.{iid}")
-            if self.dry_run:
+            if self.writes_off:
                 continue
             try:
                 self.vast.stop_instance(iid)
@@ -810,7 +823,7 @@ class Controller:
                     keep.append(j)
                     self._decide(m, "Paralon rental over and the GPU is free: start "
                                  f"the host's idle job (Vast instance {j['id']})")
-                    if not self.dry_run:
+                    if not self.writes_off:
                         try:
                             self.vast.start_instance(int(j["id"]))
                         except VastError as exc:
@@ -860,7 +873,7 @@ class Controller:
         if sent is not None and self.clock() - sent < self.cfg.reclaim_retry_s:
             return  # already asked; the renter has 2 minutes' notice
         self._decide(m, "Vast renter running: reclaim Paralon spot rental")
-        if self.dry_run:
+        if self.writes_off:
             return
         try:
             self.paralon.reclaim(m.paralon_node_id)
@@ -997,7 +1010,7 @@ class Controller:
             self._dirty = True
 
     def _write(self, m, side, *, up, listing=None):
-        if self.dry_run:
+        if self.writes_off:
             return True
         try:
             if side == "paralon":

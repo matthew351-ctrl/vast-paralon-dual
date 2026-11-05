@@ -286,8 +286,10 @@ def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
                 raise InitError(f"--agent {item!r}: machine {vid} is not paired")
             agents[int(vid)] = target.strip()
 
+        # v0.8.0: a new install starts unarmed -- it logs what it would do
+        # and changes nothing until `arm` (or Settings) sets this true.
         raw = {"on_paralon_rental": policy, "vastai_bin": vastai_bin,
-               "machines": []}
+               "armed": False, "machines": []}
         top = {k: v for k, v in (("price_gpu", args.price_gpu),
                                  ("price_min_bid", args.price_min_bid),
                                  ("duration", args.duration)) if v is not None}
@@ -356,9 +358,14 @@ def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
     out("Next:")
     out("  1. See both sides and what it would do (changes nothing):")
     out(f"       {_cmd(cfg_path, 'status')}")
-    out("  2. Start the service (runs as you, on every boot):")
+    out("  2. Start the service (runs as you, on every boot). It starts NOT")
+    out("     ARMED: it logs \"NOT ARMED: would ...\" and changes nothing:")
     out(f"       {service_command(cfg_path)}")
     out("     Follow it with: journalctl -u vast-paralon-dual -f")
+    out("  3. After a day of reading `status` and the log, arm it, then")
+    out("     restart the service:")
+    out(f"       {_cmd(cfg_path, 'arm')}")
+    out("       sudo systemctl restart vast-paralon-dual")
     # v0.8.0: the doctor table last, so a problem is the last thing shown.
     # Informational: init has written its files either way (exit 0).
     out("\nChecks (`doctor`; run it again after a fix):")

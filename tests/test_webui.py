@@ -52,7 +52,7 @@ class StatusDataShape(Scenario):
     def test_shape_and_json_ready(self):
         self.scenario()
         s = status_data(self.ctl, self.cfg)
-        self.assertEqual(set(s), {"policy", "read_error", "machines",
+        self.assertEqual(set(s), {"policy", "read_error", "machines", "armed",
                                   "next_pass", "removed_owing"})
         self.assertEqual(json.loads(json.dumps(s)), s)   # plain JSON types
         self.assertIsNone(s["read_error"])

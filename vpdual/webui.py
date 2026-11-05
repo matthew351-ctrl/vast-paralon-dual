@@ -68,6 +68,7 @@ from . import __version__
 from . import pairing, settings
 from .agent import DockerHost
 from .config import clean_name
+from .doctor import FAIL, run_checks
 from .engine import Controller
 from .state import MODES, StateStore
 from .paralon import ParalonError
@@ -235,8 +236,11 @@ class UIApp:
 
     def __init__(self, cfg, vast, paralon, *, dry_run=False, docker=DockerHost,
                  clock=time.time, monotonic=time.monotonic, config_path=None,
-                 rebuild=None, environ=None, password=None):
+                 rebuild=None, environ=None, password=None, doctor=None):
         self.cfg = cfg
+        # v0.8.0: arming in Settings runs doctor (cfg path -> rows) on the
+        # saved file; injectable for tests.
+        self.doctor = doctor or run_checks
         self.auth = Auth(password)        # v0.7.0: no password = no login
         self.config_path = config_path    # the Settings tab edits this file
         self.rebuild = rebuild            # cfg -> (vast, paralon) after a save
@@ -506,6 +510,9 @@ class UIApp:
                 self._gen += 1
             log.info("ui: config saved (%d change(s)); backup %s", len(rows),
                      dest)
+            checked = ""
+            if any(r["path"] == "armed" and r["new"] is True for r in rows):
+                checked = " " + self._arm_check()
             return 200, {
                 "ok": True, "saved": True, "diff": rows,
                 "backup": os.path.basename(dest),
@@ -514,7 +521,20 @@ class UIApp:
                            f"{os.path.basename(dest)}). The running service "
                            "reads the config only when it starts: restart "
                            f"it to apply the change ({settings.RESTART_COMMAND}). "
-                           "This page uses the new config now."}
+                           "This page uses the new config now." + checked}
+
+    def _arm_check(self):
+        """Doctor on the file just saved, as one sentence for the reply."""
+        try:
+            rows = self.doctor(self.config_path)
+        except Exception as exc:          # a broken check never blocks a save
+            return f"Doctor could not run: {exc}."
+        bad = [f"{r.group} / {r.name}: {r.detail}" for r in rows
+               if r.status == FAIL]
+        if not bad:
+            return "Armed; doctor found no failures."
+        return ("Armed, but doctor found failures; `run` refuses to start "
+                "until they are fixed: " + "; ".join(bad) + ".")
 
 
 def _err(msg):
@@ -1111,6 +1131,7 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
   <p id="notice" class="banner okmsg" role="status" hidden></p>
   <p id="fetch-error" class="banner bad" role="alert" hidden></p>
   <p id="dry-run" class="banner warn" hidden></p>
+  <p id="not-armed" class="banner warn" role="status" hidden></p>
   <section id="panel-machines" role="tabpanel" aria-labelledby="tab-machines">
     <p id="read-error" class="banner bad" hidden></p>
     <div id="removed"></div>
@@ -1760,6 +1781,7 @@ function render(s) {
   hideTip();
   $("policy").textContent = s.policy;
   $("version").textContent = "vast-paralon-dual " + s.version;
+  banner("not-armed", s.armed === false ? "Not armed: decisions are logged, nothing is changed. Arm it in Settings." : null);
   banner("dry-run", s.dry_run ? "Dry run (--dry-run): mode switches are " +
          "not saved." : null);
   banner("read-error", s.read_error !== null ? "Cannot read both sides, " +

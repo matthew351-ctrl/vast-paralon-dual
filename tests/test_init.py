@@ -94,6 +94,8 @@ class Init(TempDirMixin, unittest.TestCase):
         self.assertEqual(cfg.on_paralon_rental, "unlist_vast")
         self.assertEqual([(m.vast_machine_id, m.paralon_node_id)
                           for m in cfg.machines], [(12345, node)])
+        self.assertFalse(cfg.armed)          # v0.8.0: a new install starts unarmed
+        self.assertIn("doctor ran", self.out[-1])
         self.assertEqual(cfg.vastai_bin, "/usr/bin/vastai")
         text = "\n".join(self.out)
         self.assertIn("status", text)

@@ -1,4 +1,4 @@
-"""Command line: init | doctor | status | mode | run | ui | service."""
+"""Command line: init | doctor | arm | status | mode | run | ui | service."""
 
 import argparse
 import logging
@@ -10,6 +10,7 @@ import threading
 import time
 
 from . import __version__, doctor
+from . import settings
 from .config import ConfigError, config_path, load_config
 from .docker_events import start_watcher
 from .engine import Controller
@@ -71,6 +72,11 @@ def cmd_run(ctl, cfg):
                  ctl.mstate(m)["mode"] or "NOT SET - skipped")
     log.info("policy %s, every %ss%s", cfg.on_paralon_rental,
              cfg.poll_interval_s, ", dry-run" if ctl.dry_run else "")
+    if not ctl.armed:
+        log.warning("NOT ARMED: every decision is logged as \"NOT ARMED: "
+                    "would ...\" and nothing is changed on Vast, Paralon or "
+                    "Docker. Arm it with `arm` (or Settings in the web UI) "
+                    "and restart.")
     last = 0.0
     try:
         while not stop.is_set():
@@ -131,6 +137,37 @@ def startup_checks(cfg_path, **kw):
     return not bad
 
 
+def cmd_arm(cfg_path, skip_doctor=False, out=print, **kw):
+    """v0.8.0: set "armed": true in the config (backed up first, as a
+    Settings save). Doctor runs first; a blocking FAIL refuses (exit 2) --
+    `run` would refuse to start anyway. The service reads the config at
+    start, so it is armed from its next restart."""
+    try:
+        raw, _ = settings.read_raw(cfg_path)
+    except (OSError, ValueError) as exc:
+        out(f"error: cannot read {cfg_path}: {exc}")
+        return 2
+    if raw.get("armed", True) is True:          # absent = armed (v0.8.0)
+        out("already armed; nothing changed")
+        return 0
+    if not skip_doctor:
+        rows = doctor.run_checks(cfg_path, **kw)
+        for line in doctor.lines(rows):
+            out(line)
+        if doctor.blocking(rows):
+            out("not armed: fix the FAIL rows above first (or --skip-doctor)")
+            return 2
+    raw["armed"] = True
+    try:
+        dest = settings.save(cfg_path, raw)
+    except OSError as exc:
+        out(f"error: could not save {cfg_path}: {exc}")
+        return 2
+    out(f"armed (old config kept as {os.path.basename(dest)}). Restart the "
+        f"service to apply: {settings.RESTART_COMMAND}")
+    return 0
+
+
 def cmd_mode(ctl, mode, machine_id):
     ctl.set_mode(mode, machine_id)
     if ctl.dry_run:
@@ -182,6 +219,10 @@ def build_parser():
                    help="start even if a start-up check fails (v0.8.0)")
     sub.add_parser("doctor", help="check the install: vastai, the key, the "
                                   "config, ids, Docker, state (read-only)")
+    a = sub.add_parser("arm", help="let `run` make changes (the config's "
+                                   "\"armed\": true); runs doctor first")
+    a.add_argument("--skip-doctor", action="store_true",
+                   help="arm even if a check fails")
     u = sub.add_parser("ui", help="a local web page: status, and a mode "
                                   "switch per machine")
     u.add_argument("--host", default=DEFAULT_HOST,
@@ -211,6 +252,8 @@ def main(argv=None):
         return 0
     if args.cmd == "doctor":
         return cmd_doctor(cfg_path)
+    if args.cmd == "arm":
+        return cmd_arm(cfg_path, args.skip_doctor)
     try:
         cfg = load_config(cfg_path)
     except ConfigError as exc:

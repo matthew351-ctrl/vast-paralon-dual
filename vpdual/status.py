@@ -89,6 +89,7 @@ def status_data(ctl, cfg, machine_id=None, *, fresh_ok=True, read=None):
     ctl.dry_run = True
     targets = ctl.targets(machine_id)
     out = {"policy": cfg.on_paralon_rental, "read_error": None,
+           "armed": getattr(cfg, "armed", True),
            "machines": [], "next_pass": None, "removed_owing": []}
     if read is not None:
         data, out["read_error"] = read
@@ -216,6 +217,9 @@ def publish_snapshot(ctl, cfg, pass_ok, clock):
 def status_lines(s):
     """The `status` text, line by line (a line may start with "\\n")."""
     lines = [f"policy: {s['policy']}"]
+    if s.get("armed") is False:
+        lines.append("NOT ARMED: decisions are logged, nothing is changed "
+                     "(arm it with `arm`, then restart the service)")
     if s["read_error"] is not None:
         lines.append("cannot read both sides, the watcher would hold: "
                      f"{s['read_error']}")

@@ -107,6 +107,10 @@ class Config:
     fast_poll_s: int = 5            # pass interval while a machine is recovering
     jupyter_refresh_s: int = 3600   # pull Paralon's Jupyter image this often while the agent is stopped
     idle_job_images: list = field(default_factory=list)   # the host's own idle job
+    # v0.8.0: false = decide and log ("NOT ARMED: would ..."), write nothing.
+    # `init` writes false; a config without the key (any install from before
+    # v0.8.0) is armed, so it keeps working unchanged.
+    armed: bool = True
     paralon_api_key: str = field(default="", repr=False)  # never printed
 
     def machine(self, vast_machine_id):
@@ -251,8 +255,9 @@ def check_config(raw, env=None):
                               or kwargs[key] < 1):
             err(key, f"\"{key}\" must be a whole number >= 1 "
                      f"(got {kwargs[key]!r})")
-    if "docker_events" in kwargs and not isinstance(kwargs["docker_events"], bool):
-        err("docker_events", "\"docker_events\" must be true or false (no quotes)")
+    for key in ("docker_events", "armed"):
+        if key in kwargs and not isinstance(kwargs[key], bool):
+            err(key, f"\"{key}\" must be true or false (no quotes)")
     imgs = kwargs.get("idle_job_images", [])
     if not isinstance(imgs, list) or not all(isinstance(i, str) and i for i in imgs):
         err("idle_job_images",

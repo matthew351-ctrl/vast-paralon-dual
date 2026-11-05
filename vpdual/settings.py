@@ -46,7 +46,7 @@ _BACKUP_RE = re.compile(r"\.bak-\d{8}-\d{6}(-\d+)?$")
 # Settings shown, by group (every user-settable Config key; the key and the
 # machines list are handled on their own).
 GROUPS = [
-    ("General", ["on_paralon_rental", "poll_interval_s", "fast_poll_s",
+    ("General", ["armed", "on_paralon_rental", "poll_interval_s", "fast_poll_s",
                  "docker_events", "gpu_free_mib", "idle_job_images"]),
     ("Vast", ["vastai_bin"]),
     ("Paralon", ["paralon_base_url", "paralon_min_get_interval_s",
