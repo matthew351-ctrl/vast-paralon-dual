@@ -75,11 +75,12 @@ Run these as your normal user on the control plane or the GPU machine (see
 above). Nothing is changed on Vast or Paralon until step 7.
 
 ```sh
-# 1. Install (Python 3.8+; pipx keeps the Vast CLI out of the system Python,
-#    which recent Ubuntu/Debian lock down)
-git clone https://github.com/matthew351-ctrl/vast-paralon-dual.git ~/vast-paralon-dual && cd ~/vast-paralon-dual
-sudo apt install -y pipx && pipx install vastai && pipx ensurepath
+# 1. Install (Python 3.8+). pipx gives each tool its own environment, out of
+#    the system Python that recent Ubuntu/Debian lock down.
+sudo apt install -y pipx && pipx ensurepath
 export PATH="$HOME/.local/bin:$PATH"      # until you log in again
+pipx install vastai
+pipx install git+https://github.com/matthew351-ctrl/vast-paralon-dual.git
 vastai set api-key YOUR_VAST_API_KEY
 
 # 2. Set the Paralon key (create it in the Paralon dashboard with the
@@ -88,26 +89,40 @@ export PARALON_API_KEY=prlc_...
 
 # 3. Pair your Vast machines with Paralon nodes and choose the policy.
 #    The config it writes is NOT ARMED ("armed": false).
-python3 vast_paralon_dual.py init
+vast-paralon-dual init
 
 # 4. Check the install: every row PASS or WARN, each FAIL with its fix
-python3 vast_paralon_dual.py doctor
+vast-paralon-dual doctor
 
 # 5. Start the service, unarmed: it logs "NOT ARMED: would ..." for every
 #    decision and changes nothing (runs as you, starts on boot)
-python3 vast_paralon_dual.py service | sudo tee /etc/systemd/system/vast-paralon-dual.service >/dev/null
+vast-paralon-dual service | sudo tee /etc/systemd/system/vast-paralon-dual.service >/dev/null
 sudo systemctl daemon-reload && sudo systemctl enable --now vast-paralon-dual
 journalctl -u vast-paralon-dual -f
 
 # 6. For a day: read what it would do (the web UI shows the same, under an
 #    amber "Not armed" banner)
-python3 vast_paralon_dual.py status
-python3 vast_paralon_dual.py ui            # http://127.0.0.1:8787
+vast-paralon-dual status
+vast-paralon-dual ui                      # http://127.0.0.1:8787
 
 # 7. Arm it (doctor runs again first), then restart the service
-python3 vast_paralon_dual.py arm
+vast-paralon-dual arm
 sudo systemctl restart vast-paralon-dual
 ```
+
+**From a clone instead** (no install; what the examples below use): the
+same steps with `python3 vast_paralon_dual.py` in place of
+`vast-paralon-dual`:
+
+```sh
+git clone https://github.com/matthew351-ctrl/vast-paralon-dual.git ~/vast-paralon-dual && cd ~/vast-paralon-dual
+python3 vast_paralon_dual.py init
+```
+
+Upgrading: `pipx upgrade vast-paralon-dual` (or `git pull` in the clone),
+then `doctor` and `sudo systemctl restart vast-paralon-dual`. `service`
+writes the unit for whichever you use (`python -m vpdual` for a pipx
+install, the script for a clone).
 
 `init` prints the exact commands for steps 5 to 7 when it finishes, then the
 `doctor` table. Set each Paralon node to **spot** in the Paralon dashboard:

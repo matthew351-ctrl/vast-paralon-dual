@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 
 from vpdual.cli import cmd_status, main
@@ -245,6 +246,23 @@ class Service(unittest.TestCase):
         self.assertIn("-c /home/h/.config/vast-paralon-dual/config.json run",
                       text)
         self.assertIn("vast_paralon_dual.py", text)
+
+    def test_installed_package_has_its_own_unit(self):
+        """v0.8.0: a pip / pipx install has no script and no systemd/: the
+        unit runs `python -m vpdual` from the embedded template, which
+        must stay the file's body."""
+        from vpdual import install
+        with open(install.TEMPLATE, encoding="utf-8") as fh:
+            body = [ln for ln in fh.read().splitlines() if not ln.startswith("#")]
+        self.assertEqual(body, [ln for ln in install.UNIT_TEMPLATE.splitlines()
+                                if not ln.startswith("#")])
+        with mock.patch.object(install, "SCRIPT", "/nope/vast_paralon_dual.py"), \
+                mock.patch.object(install, "TEMPLATE", "/nope/unit.service"):
+            text = render_service("/c/config.json", user="u",
+                                  python="/venv/bin/python")
+        self.assertIn("ExecStart=/venv/bin/python -m vpdual -c /c/config.json run",
+                      text)
+        self.assertNotIn("@", text)
 
     def test_service_command_needs_no_config(self):
         buf = io.StringIO()

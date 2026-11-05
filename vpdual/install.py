@@ -27,6 +27,26 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(HERE, "vast_paralon_dual.py")
 TEMPLATE = os.path.join(HERE, "systemd", "vast-paralon-dual.service")
 UNIT_PATH = "/etc/systemd/system/vast-paralon-dual.service"
+# v0.8.0: a pip / pipx install has neither the script nor systemd/; the unit
+# is then this copy of the template's body (a test keeps the two equal).
+UNIT_TEMPLATE = """[Unit]
+Description=Vast.ai + Paralon Cloud dual-listing watcher
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+EnvironmentFile=@ENV_FILE@
+ExecStart=@PYTHON@ @SCRIPT@ -c @CONFIG@ run
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+"""
 
 
 class InitError(Exception):
@@ -37,8 +57,15 @@ def env_file_for(cfg_path):
     return os.path.join(os.path.dirname(cfg_path), "env")
 
 
+def _entry():
+    """How to start this tool: the clone's script, or `-m vpdual` for a pip
+    / pipx install, which has no script (v0.8.0)."""
+    return [SCRIPT] if os.path.exists(SCRIPT) else ["-m", "vpdual"]
+
+
 def _cmd(cfg_path, *args):
-    parts = [shlex.quote(sys.executable or "python3"), shlex.quote(SCRIPT)]
+    parts = [shlex.quote(sys.executable or "python3")] + \
+        [shlex.quote(a) for a in _entry()]
     if cfg_path != config_path(DEFAULT_CONFIG):
         parts += ["-c", shlex.quote(cfg_path)]
     return " ".join(parts + list(args))
@@ -46,14 +73,17 @@ def _cmd(cfg_path, *args):
 
 # -- service ---------------------------------------------------------------
 def render_service(cfg_path, user=None, python=None):
-    with open(TEMPLATE, encoding="utf-8") as fh:
-        lines = fh.read().splitlines()
+    try:
+        with open(TEMPLATE, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        lines = UNIT_TEMPLATE.splitlines()
     while lines and lines[0].startswith("#"):
         lines.pop(0)              # the template's how-to header
     text = "\n".join(lines) + "\n"
     for key, val in {"@USER@": user or getpass.getuser(),
                      "@PYTHON@": python or sys.executable or "/usr/bin/python3",
-                     "@SCRIPT@": SCRIPT,
+                     "@SCRIPT@": " ".join(_entry()),
                      "@CONFIG@": cfg_path,
                      "@ENV_FILE@": env_file_for(cfg_path)}.items():
         text = text.replace(key, val)

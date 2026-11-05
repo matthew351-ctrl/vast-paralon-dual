@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vast-paralon-dual"
+version = "0.8.0"
+description = "List GPU machines on Vast.ai and Paralon Cloud at once, or switch fully between them."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+# Runtime: the Python standard library only (plus Vast's `vastai` CLI on
+# PATH, installed on its own: `pipx install vastai`).
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console",
+]
+
+[project.urls]
+Homepage = "https://github.com/matthew351-ctrl/vast-paralon-dual"
+
+[project.scripts]
+vast-paralon-dual = "vpdual.cli:main"
+
+[tool.setuptools]
+packages = ["vpdual"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# golden `status` output, one JSON scenario per line
+"tests/test_status_text.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

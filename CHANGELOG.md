@@ -24,7 +24,13 @@ Public-readiness release.
   changes, the message on stdin and `VPDUAL_MACHINE` / `VPDUAL_LEVEL` /
   `VPDUAL_EVENT` in its environment; rate-limited per machine and event.
   README examples: ntfy, Telegram, mail.
-- README: a risk statement at the top, the staged quick start (install,
+- **Packaging and CI**: `pyproject.toml` (no runtime dependencies,
+  `requires-python >= 3.8`, console script `vast-paralon-dual`), so
+  `pipx install git+https://github.com/matthew351-ctrl/vast-paralon-dual.git`
+  works; `python -m vpdual`; `service` writes a unit for a pipx install too.
+  GitHub Actions: pytest on Python 3.8, 3.10 and 3.12, `ruff check`
+  (E, F, W; line length 100). The code is ruff-clean.
+- README: a risk statement at the top, pipx install first, the staged quick start (install,
   key, init, doctor, run unarmed, check, arm), more known limits; the
   "What's new" sections moved here.
 
