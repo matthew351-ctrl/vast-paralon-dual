@@ -1,6 +1,7 @@
 """v0.7.0 review fixes: the `run` service's status snapshot the web UI
 serves (item 1)."""
 
+import http.client
 import io
 import json
 import os
@@ -15,7 +16,7 @@ from vpdual.cli import build_parser, publish_status
 from vpdual.engine import RELIST_BACKOFF_S, RELIST_FAST_TRIES, Controller
 from vpdual.state import StateStore
 from vpdual.status import snapshot_path
-from vpdual.webui import (LOCKOUT_FAILS, LOCKOUT_S, PASSWORD_ENV,
+from vpdual.webui import (DRAIN_MAX, LOCKOUT_FAILS, LOCKOUT_S, PASSWORD_ENV,
                           SNAPSHOT_MAX_AGE_PASSES, TOKEN_HEADER, Auth, UIApp,
                           bind_warning, serve)
 
@@ -278,6 +279,53 @@ class Login(Server):
         super().start()                                # Auth(None)
         self.assertEqual(self.request("GET", "/api/status")[0].status, 200)
         self.assertEqual(self.request("GET", "/login")[0].status, 303)
+
+
+class KeepAlive(Server):
+    def conn(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        self.addCleanup(c.close)
+        return c
+
+    def get(self, c, path):
+        c.request("GET", path, headers={"Host": f"127.0.0.1:{self.port}"})
+        r = c.getresponse()
+        r.read()
+        return r
+
+    def test_one_connection_serves_several_requests(self):
+        self.start()
+        c = self.conn()
+        for path in ("/", "/api/status", "/api/discover", "/nope"):
+            r = self.get(c, path)
+            self.assertEqual(r.version, 11)
+            self.assertIsNotNone(r.getheader("Content-Length"), path)
+            self.assertFalse(r.will_close, path)
+
+    def test_refusals_with_an_unread_body_close(self):
+        self.start()
+        hdr = {"Host": f"127.0.0.1:{self.port}", TOKEN_HEADER: self.app.token,
+               "Content-Type": "application/json"}
+        c = self.conn()
+        c.request("POST", "/api/mode", body=b"x" * (DRAIN_MAX + 10),
+                  headers=hdr)
+        r = c.getresponse()
+        r.read()
+        self.assertEqual((r.status, r.will_close), (413, True))
+        c = self.conn()                       # no Content-Length at all
+        c.putrequest("POST", "/api/mode", skip_host=True)
+        for k, v in hdr.items():
+            c.putheader(k, v)
+        c.endheaders()
+        r = c.getresponse()
+        r.read()
+        self.assertEqual((r.status, r.will_close), (413, True))
+        c = self.conn()                       # over the limit, drained: kept
+        c.request("POST", "/api/mode", body=b"x" * 5000, headers=hdr)
+        r = c.getresponse()
+        r.read()
+        self.assertEqual((r.status, r.will_close), (413, False))
+        self.assertEqual(self.get(c, "/api/status").status, 200)
 
 
 class NonLoopbackBind(unittest.TestCase):

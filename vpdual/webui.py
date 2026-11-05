@@ -524,6 +524,11 @@ def _err(msg):
 class _Handler(BaseHTTPRequestHandler):
     server_version = "vast-paralon-dual"
     sys_version = ""
+    # v0.7.0: keep-alive (the page polls every REFRESH_S). Every reply goes
+    # through _send, which always sets Content-Length; a request whose body
+    # was not read in full closes the connection instead (_read_body), or
+    # its leftover bytes would be parsed as the next request.
+    protocol_version = "HTTP/1.1"
 
     @property
     def app(self):
@@ -544,6 +549,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         for name, value in headers:
             self.send_header(name, value)
+        if self.close_connection:             # tell the client, too
+            self.send_header("Connection", "close")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -638,6 +645,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- routes --------------------------------------------------------
     def do_GET(self):
+        if self.headers.get("Content-Length", "0").strip() not in ("", "0"):
+            self.close_connection = True      # a GET body is never read
         if not self._host_ok():
             return
         path = urlsplit(self.path).path
@@ -680,13 +689,18 @@ class _Handler(BaseHTTPRequestHandler):
     def _read_body(self, limit):
         """The request body, or None when it is missing or over `limit`.
         Read (up to a bound) before any reply, so a refusal is not lost to a
-        TCP reset over unread bytes."""
+        TCP reset over unread bytes. Not drained in full (no or a bad
+        Content-Length, or over DRAIN_MAX): the reply closes the connection."""
         try:
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
+            self.close_connection = True
             return None
         if length < 0:
+            self.close_connection = True
             return None
+        if length > DRAIN_MAX:
+            self.close_connection = True
         data = self.rfile.read(min(length, DRAIN_MAX))
         return data if length <= limit else None
 
