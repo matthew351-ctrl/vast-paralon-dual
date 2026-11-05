@@ -8,10 +8,12 @@ import tempfile
 import unittest
 
 from vpdual.cli import publish_status
+from vpdual.engine import RELIST_BACKOFF_S, RELIST_FAST_TRIES, Controller
 from vpdual.state import StateStore
 from vpdual.status import snapshot_path
 from vpdual.webui import SNAPSHOT_MAX_AGE_PASSES, UIApp
 
+from helpers import FakeParalon, FakeVast, TempDirMixin, make_config
 from status_scenario import build_scenario
 
 
@@ -98,6 +100,74 @@ class Snapshot(unittest.TestCase):
         store.save(st)
         self.service_pass()                           # nothing read: removed
         self.assertFalse(os.path.exists(self.path))
+
+
+class RefusingVast(FakeVast):
+    """`vastai list machine` exits 0 but Vast does not list the machine."""
+    refuse = True
+
+    def list_machine(self, machine_id, listing):
+        self.writes.append(("list", machine_id, dict(listing)))
+        if not self.refuse:
+            self.machines[machine_id]["listed"] = True
+
+
+class RelistBackoff(TempDirMixin, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.now = [1000.0]
+        self.vast = RefusingVast(listed=False)
+        cfg = make_config(self.state_path, "unlist_vast")
+        self.store.save({"machines": {"111": {
+            "mode": "dual",
+            "took_off": {"vast": True, "paralon": False, "agent": False}}}})
+        self.ctl = Controller(cfg, self.vast, FakeParalon(), self.store,
+                              clock=lambda: self.now[0])
+
+    def lists(self):
+        return sum(1 for w in self.vast.writes if w[0] == "list")
+
+    def test_five_at_poll_rate_then_every_ten_minutes(self):
+        with self.assertLogs("vpdual", "WARNING") as logs:
+            for _ in range(8):
+                self.ctl.poll()
+                self.now[0] += 30
+        self.assertEqual(self.lists(), RELIST_FAST_TRIES)
+        warned = [r for r in logs.output if "not accepted the relist" in r]
+        self.assertEqual(len(warned), 1)
+        self.assertIn("retrying every 10 min", warned[0])
+        st = self.mstate()
+        self.assertEqual(st["relist_attempts"], RELIST_FAST_TRIES)
+        self.assertEqual(st["relist_next_at"], 1000.0 + 4 * 30 + RELIST_BACKOFF_S)
+        self.now[0] = st["relist_next_at"]
+        self.ctl.poll()
+        self.assertEqual(self.lists(), RELIST_FAST_TRIES + 1)
+        self.ctl.poll()
+        self.assertEqual(self.lists(), RELIST_FAST_TRIES + 1)   # throttled
+
+    def test_cleared_when_confirmed_back(self):
+        for _ in range(RELIST_FAST_TRIES + 1):
+            self.ctl.poll()
+        self.vast.refuse = False
+        self.now[0] += RELIST_BACKOFF_S
+        self.ctl.poll()                       # accepted this time
+        self.ctl.poll()                       # the read confirms it
+        st = self.mstate()
+        self.assertFalse(st["took_off"]["vast"])
+        self.assertEqual((st["relist_attempts"], st["relist_next_at"]), (0, None))
+
+    def test_state_file_keeps_both_keys(self):
+        self.ctl.poll()
+        with open(self.state_path, encoding="utf-8") as fh:
+            raw = json.load(fh)["machines"]["111"]
+        self.assertEqual(raw["relist_attempts"], 1)
+        raw.update(relist_attempts=True, relist_next_at="soon")
+        self.assertEqual(StateStore(self.state_path).load()["machines"]["111"]
+                         ["relist_attempts"], 1)   # unchanged on disk
+        from vpdual.state import _clean
+        bad = _clean(raw)
+        self.assertEqual((bad["relist_attempts"], bad["relist_next_at"]),
+                         (0, None))
 
 
 if __name__ == "__main__":

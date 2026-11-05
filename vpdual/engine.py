@@ -122,6 +122,10 @@ BURST_S = 240
 # instances` for this long while its container winds down (passes can run
 # every 5 s in a burst).
 IDLE_STOP_WAIT_S = 60
+# v0.7.0: a Vast relist still not showing after this many passes is retried
+# only every RELIST_BACKOFF_S (Vast refuses some listings with exit 0).
+RELIST_FAST_TRIES = 5
+RELIST_BACKOFF_S = 600
 
 
 def describe_listing(listing):
@@ -908,6 +912,8 @@ class Controller:
                          "connected on the machine); not making it available",
                          logging.WARNING)
             return False
+        if side == "vast" and (want_off or is_up):
+            self._relist_done(st)
         if want_off:
             if is_up:
                 msg = f"take {side} off"
@@ -934,7 +940,10 @@ class Controller:
                         "price_min_bid in the config vast_listing. Add them "
                         "to the config, or list it by hand.", logging.WARNING)
                     return False
+                if self._relist_throttled(m, st):
+                    return True
                 self._decide(m, f"put vast back ({describe_listing(listing)})")
+                self._relist_sent(m, st)
             else:
                 self._decide(m, f"put {side} back")
             if not self._write(m, side, up=True, listing=listing):
@@ -953,6 +962,39 @@ class Controller:
                 st["saved_listing"] = None
             self._decide(m, f"{side} is back; flag cleared")
         return True
+
+    # -- relist backoff (v0.7.0) ----------------------------------------
+    # `vastai list machine` exits 0 on a listing Vast refuses (an unverified
+    # or de-listed machine), so such a machine was re-listed every pass
+    # forever, silently. After RELIST_FAST_TRIES sent with the side still
+    # down, one try every RELIST_BACKOFF_S and one warning.
+    def _relist_throttled(self, m, st):
+        nxt = st["relist_next_at"]
+        if st["relist_attempts"] < RELIST_FAST_TRIES or nxt is None \
+                or self.clock() >= nxt:
+            return False
+        at = datetime.fromtimestamp(nxt, timezone.utc).strftime("%H:%M:%SZ")
+        self._decide(m, f"hold: Vast has not accepted the relist after "
+                     f"{st['relist_attempts']} attempts; next try at {at}",
+                     logging.DEBUG)
+        return True
+
+    def _relist_sent(self, m, st):
+        st["relist_attempts"] += 1
+        self._dirty = True
+        if st["relist_attempts"] >= RELIST_FAST_TRIES:
+            st["relist_next_at"] = self.clock() + RELIST_BACKOFF_S
+            if st["relist_attempts"] == RELIST_FAST_TRIES:
+                self._decide(m, "Vast has not accepted the relist after "
+                             f"{st['relist_attempts']} attempts; retrying "
+                             f"every {RELIST_BACKOFF_S // 60} min (is the "
+                             "machine verified and listable on Vast?)",
+                             logging.WARNING)
+
+    def _relist_done(self, st):
+        if st["relist_attempts"] or st["relist_next_at"] is not None:
+            st["relist_attempts"], st["relist_next_at"] = 0, None
+            self._dirty = True
 
     def _write(self, m, side, *, up, listing=None):
         if self.dry_run:

@@ -38,6 +38,11 @@ def default_machine_state():
         # before the stop; an entry goes only when a later read shows it back.
         "idle_job": [],
         "reclaim_sent_at": None,
+        # v0.7.0: Vast relists sent with the side still down (`vastai list
+        # machine` exits 0 on a refused listing), and when the next may go
+        # once they are throttled. Cleared when the side is confirmed back.
+        "relist_attempts": 0,
+        "relist_next_at": None,
         "decisions": [],
     }
 
@@ -58,6 +63,12 @@ def _clean(saved):
                           and j.get("id") not in (None, "")]
     if isinstance(saved.get("reclaim_sent_at"), (int, float)):
         st["reclaim_sent_at"] = saved["reclaim_sent_at"]
+    tries = saved.get("relist_attempts")
+    if isinstance(tries, int) and not isinstance(tries, bool) and tries > 0:
+        st["relist_attempts"] = tries
+    if isinstance(saved.get("relist_next_at"), (int, float)) and \
+            not isinstance(saved.get("relist_next_at"), bool):
+        st["relist_next_at"] = saved["relist_next_at"]
     if isinstance(saved.get("decisions"), list):
         st["decisions"] = saved["decisions"][-MAX_DECISIONS:]
     return st
