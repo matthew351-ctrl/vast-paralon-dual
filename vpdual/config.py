@@ -14,7 +14,7 @@ import os
 import unicodedata
 from dataclasses import dataclass, field
 
-from .agent import valid_target
+from .agent import AGENT_CONTROLS, UNIT_RE, valid_target
 
 POLICIES = ("unlist_vast", "keep_vast_listed")   # the default first: init offers it as 1 (v0.4.8)
 DEFAULT_POLICY = "unlist_vast"   # Vast cannot start a renter on a Paralon-rented GPU
@@ -88,6 +88,10 @@ class Machine:
     # Optional label for people ("GPU box 1"): `status` and the web UI.
     # Never a key -- commands still take the Vast machine id.
     name: str = ""
+    # v0.8.0: how the agent is stopped and started (agent.AgentControl):
+    # "docker" (default), "systemd" (needs paralon_agent_unit), "none".
+    agent_control: str = "docker"
+    paralon_agent_unit: str = ""
 
 
 @dataclass
@@ -207,7 +211,8 @@ def check_config(raw, env=None):
             continue
         unknown = sorted(k for k in entry if not k.startswith("_") and k not in
                          ("vast_machine_id", "paralon_node_id", "vast_listing",
-                          "paralon_agent", "name"))
+                          "paralon_agent", "name", "agent_control",
+                          "paralon_agent_unit"))
         if unknown:
             err(where, f"unknown {where} keys: {', '.join(unknown)}")
         try:
@@ -243,8 +248,27 @@ def check_config(raw, env=None):
                 "line breaks, tabs or control characters, no leading, "
                 f"trailing or double spaces (got {name!r})")
             name = ""
+        control = entry.get("agent_control", "docker")
+        unit = entry.get("paralon_agent_unit", "")
+        if control not in AGENT_CONTROLS:
+            err(f"{where}.agent_control",
+                f"{where}.agent_control must be one of: "
+                + " | ".join(AGENT_CONTROLS) + f" (got {control!r})")
+            control = "docker"
+        elif control == "systemd":
+            if not isinstance(unit, str) or not UNIT_RE.match(unit) \
+                    or unit.startswith("-"):
+                err(f"{where}.paralon_agent_unit",
+                    f"{where}: agent_control \"systemd\" needs "
+                    "\"paralon_agent_unit\", the agent's systemd --user unit "
+                    f"(e.g. \"paralon-agent.service\"; got {unit!r})")
+            if not agent:
+                err(f"{where}.paralon_agent",
+                    f"{where}: agent_control \"systemd\" needs "
+                    "\"paralon_agent\" (where to run systemctl)")
         if vid is not None and node is not None:
-            machines.append(Machine(vid, node, listing, agent or "", name))
+            machines.append(Machine(vid, node, listing, agent or "", name,
+                                    control, unit if isinstance(unit, str) else ""))
 
     known = set(Config.__dataclass_fields__) - {"paralon_api_key", "machines"}
     unknown = sorted(k for k in raw if k not in known and not k.startswith("_")

@@ -38,6 +38,11 @@ Public-readiness release.
   summary, the last 10 decisions per machine; ssh targets and the key
   redacted. README: "Reporting a problem" (community-maintained, not
   supported by Paralon or Vast).
+- **`agent_control`** per machine: `docker` (default, as before),
+  `systemd` (`systemctl --user stop|start` of `paralon_agent_unit` over the
+  same local / ssh path) or `none` (the agent is never touched). The engine
+  reaches the agent through one AgentControl interface; the decisions are
+  unchanged.
 - README: a risk statement at the top, pipx install first, the staged quick start (install,
   key, init, doctor, run unarmed, check, arm), more known limits; the
   "What's new" sections moved here.

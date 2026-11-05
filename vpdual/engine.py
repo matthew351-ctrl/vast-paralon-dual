@@ -77,7 +77,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .agent import (AGENT_IMAGE, AgentError, DockerHost, PARALON_IMAGE_PREFIX, PARALON_NAME_PREFIX,
-                    PIN_PREFIX, RENTAL, VAST_NAME_RE, agent_of, leftovers)
+                    PIN_PREFIX, RENTAL, VAST_NAME_RE, agent_control, leftovers)
 from .config import REQUIRED_PRICES
 from .notify import Notifier
 from .paralon import ParalonError
@@ -468,7 +468,13 @@ class Controller:
         on = machine.vast_running(self.cfg.idle_job_images)
         if on:
             return f"Vast container(s) running on the machine: {', '.join(on)}"
-        agent = agent_of(machine.containers)
+        control = self._control(m)
+        if not control.managed:
+            return None               # agent_control none: never waited for
+        try:
+            agent = control.agent(machine.containers)
+        except AgentError as exc:
+            return f"the Paralon agent's state is unreadable ({exc})"
         if agent is None or not agent.running:
             return "the Paralon agent is not running yet"
         return None
@@ -618,8 +624,12 @@ class Controller:
         the pass never waits for it). The next pass's pin keeps it."""
         if self.writes_off or machine is None:
             return
-        agent = agent_of(machine.containers)
-        if agent is not None and agent.running:
+        control = self._control(m)
+        try:
+            agent = control.agent(machine.containers) if control.managed else None
+        except AgentError:
+            return
+        if not control.managed or (agent is not None and agent.running):
             return                    # the agent pulls its own image
         last, thread = self._jupyter_refresh.get(m.vast_machine_id, (None, None))
         if thread is not None and thread.is_alive():
@@ -652,6 +662,9 @@ class Controller:
         """Rule 1, agent half: the Paralon agent is off while Vast rents."""
         st = self.mstate(m)
         flags = st["took_off"]
+        control = self._control(m)
+        if not control.managed:
+            return True               # agent_control none: never touched
         if not vast_renter and not flags["agent"]:
             return True               # nothing to stop, no start owed
         if machine is not None:
@@ -663,9 +676,16 @@ class Controller:
                 self._decide(m, f"hold: cannot read Docker for the Paralon agent "
                              f"({exc})", logging.WARNING)
                 return False
-        agent = agent_of(containers)
+        try:
+            agent = control.agent(containers)
+        except AgentError as exc:
+            self._decide(m, f"hold: cannot read the Paralon agent's state "
+                         f"({exc})", logging.WARNING)
+            return False
         if agent is None:
-            self._decide(m, f"no Paralon agent container on {m.paralon_agent}; "
+            what = (f"unit {m.paralon_agent_unit}" if m.agent_control == "systemd"
+                    else "container")
+            self._decide(m, f"no Paralon agent {what} on {m.paralon_agent}; "
                          "nothing to stop or start", logging.WARNING)
             return True
         if vast_renter:
@@ -682,8 +702,8 @@ class Controller:
                 if not flags["agent"]:
                     flags["agent"] = True
                     self._save()      # the owed start is on disk first
-                steps = [("stop", [agent.id])] + ([("kill", [c.id for c in extra])]
-                                                  if extra else [])
+                steps = [("stop", agent)] + ([("kill", [c.id for c in extra])]
+                                             if extra else [])
             elif extra:
                 self._decide(m, f"Vast renter running: stop Paralon's "
                              f"containers ({names})")
@@ -694,7 +714,9 @@ class Controller:
             # watches die; then the leftovers are KILLED at once -- the
             # inference worker ignores SIGTERM and holds ~20 GB of the
             # renter's GPU memory for as long as a stop would wait.
-            return all(self._docker_write(m, verb, group) for verb, group in steps)
+            return all(self._docker_write(m, verb, arg, control=control
+                                          if verb != "kill" else None)
+                       for verb, arg in steps)
         if not flags["agent"]:
             return True               # someone else stopped it: leave it
         if agent.running:
@@ -709,14 +731,23 @@ class Controller:
                          f"({machine.gpu_text() if machine else 'machine unread'})")
             return True
         self._decide(m, "no Vast renter and the GPU is free: start the Paralon agent")
-        return self._docker_write(m, "start", agent.id)
+        return self._docker_write(m, "start", agent, control=control)
 
-    def _docker_write(self, m, verb, arg, what="Paralon agent"):
+    def _control(self, m):
+        """v0.8.0: the machine's AgentControl (docker | systemd | none)."""
+        return agent_control(m, self.docker)
+
+    def _docker_write(self, m, verb, arg, what="Paralon agent", control=None):
+        """A Docker write on the machine; with `control`, the agent's own
+        stop / start through it (arg = the agent)."""
         if self.writes_off:
             return True
         try:
-            host = self.docker(m.paralon_agent)
-            {"stop": host.stop, "kill": host.kill, "start": host.start}[verb](arg)
+            if control is not None:
+                {"stop": control.stop, "start": control.start}[verb](arg)
+            else:
+                host = self.docker(m.paralon_agent)
+                {"stop": host.stop, "kill": host.kill, "start": host.start}[verb](arg)
         except AgentError as exc:
             self._decide(m, f"{what} {verb} failed, will retry: {exc}",
                          logging.WARNING)

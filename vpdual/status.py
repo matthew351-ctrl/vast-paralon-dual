@@ -17,7 +17,7 @@ sides again -- one /api/status then costs no vastai, Paralon or SSH call.
 import logging
 import os
 
-from .agent import AgentError, agent_of
+from .agent import AgentError, agent_control
 from .config import clean_name
 from .engine import Controller, describe_listing
 from .paralon import ParalonError
@@ -34,9 +34,12 @@ NOT_FOUND_NODE = "node not found in GET /nodes"
 
 def _agent(ctl, cfg, m):
     """(agent, machine) for a machine with `paralon_agent` set."""
+    control = agent_control(m, ctl.docker)      # v0.8.0: docker | systemd | none
     try:
-        found = agent_of(ctl.docker(m.paralon_agent).containers())
-        agent = {"state": ("not found" if found is None else
+        found = control.agent(ctl.docker(m.paralon_agent).containers()) \
+            if control.managed else None
+        agent = {"state": ("not managed" if not control.managed else
+                           "not found" if found is None else
                            "running" if found.running else "stopped"),
                  "error": None}
     except (AgentError, ValueError) as exc:

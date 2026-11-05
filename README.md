@@ -464,6 +464,8 @@ the tool does not list the machine and logs `hold: cannot relist Vast: ...`.
 | `armed` | `false` = every decision is logged as `NOT ARMED: would ...` and nothing is changed on Vast, Paralon or Docker (`init` writes `false`); `true` = act. Left out = `true`, so a config from before v0.8.0 keeps working. `arm` or the Settings tab sets it |
 | `notify_command` | optional shell command run for warnings and confirmed side changes (see Notifications) |
 | `machines` | list of `{vast_machine_id, paralon_node_id}`, each with an optional `paralon_agent` and an optional `vast_listing` that overrides the top-level one |
+| `machines[].agent_control` | how the Paralon agent is stopped and started (v0.8.0): `docker` (default: its container), `systemd` (`systemctl --user stop` / `start` of `paralon_agent_unit` over the same local / ssh path; the user needs a systemd instance, `loginctl enable-linger`; the containers the agent started are still killed with `docker`), or `none` (the agent is never stopped, started or waited for; the other protections that use `paralon_agent` stay) |
+| `machines[].paralon_agent_unit` | the agent's systemd `--user` unit, e.g. `paralon-agent.service`; required with `agent_control: "systemd"` |
 | `machines[].name` | optional label for people (up to 64 characters), shown by `status` and the web UI. Left out, the hostname Vast reports for the machine is shown, else the Vast machine id. Only a label: commands and the web UI's switch still use the Vast machine id |
 | `machines[].paralon_agent` | how to run `docker` on that machine: `local`, or `user@host` for ssh (key login, `BatchMode`; the user must be in the `docker` group). **Required for the protections**: renter detection from the machine's own containers, `docker_events`, stopping Paralon's agent and its leftovers during Vast rentals, stopping your idle job during Paralon rentals, and the GPU-free waits before the agent starts and before Vast is relisted. Left out, the tool has only Vast's running count and Paralon's API on a 60 s pass |
 | `vast_listing` | optional fallback listing terms (see Relist prices); keys map to `vastai list machine` flags: `price_gpu`, `price_min_bid`, `price_disk`, `price_inetu`, `price_inetd`, `discount_rate`, `min_chunk`, `end_date` or `duration` (not both), `vol_size`, `vol_price` |
@@ -615,10 +617,10 @@ container can be removed with `docker rm`.
   Vast machines, is not supported.
 - **A partial Vast rental counts as rented.** A renter on some of a
   machine's GPUs pauses the Paralon node for the whole machine.
-- **The Paralon agent and your idle job must be Docker containers**: they
-  are stopped and started with `docker` (an idle job can also be a Vast
-  default job). An agent run as a systemd service or a bare process cannot
-  be managed yet; leave `paralon_agent` out for such a machine.
+- **Your idle job must be a Docker container** (or a Vast default job).
+  The Paralon agent can be a container or a systemd `--user` unit
+  (`agent_control`); an agent run any other way cannot be managed: set
+  `"agent_control": "none"` for that machine.
 - On a Vast host, the Paralon agent needs **Docker 29.2 or newer** to see the
   GPU. Upgrade using Vast's own host instructions; this tool does not.
 - Since 2026-10-26 Paralon runs no inference or render jobs on **spot**

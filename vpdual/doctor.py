@@ -22,7 +22,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from .agent import AgentError, DockerHost
+from .agent import AgentError, DockerHost, SystemdControl
 from .config import (REQUIRED_PRICES, ConfigError, DEFAULT_STATE, key_from_env_file,
                      load_config)
 from .paralon import ParalonClient, ParalonError
@@ -263,6 +263,12 @@ class Doctor:
         seen = set()
         for m in self.cfg.machines:
             t = m.paralon_agent
+            if m.agent_control == "none":
+                self.add(g, f"machine {m.vast_machine_id}", PASS,
+                         "agent_control none: the agent is never touched")
+                continue
+            if m.agent_control == "systemd":
+                self.check_unit(g, m)
             if not t:
                 self.add(g, f"machine {m.vast_machine_id}", WARN,
                          "no paralon_agent: the agent keeps starting work "
@@ -284,6 +290,24 @@ class Doctor:
                 continue
             how = "docker ps" if t == "local" else "ssh (BatchMode) + docker ps"
             self.add(g, t, PASS, f"{how} works ({n} container(s))")
+
+    def check_unit(self, g, m):
+        """agent_control systemd: `systemctl --user show` works there and
+        the unit is loaded (v0.8.0)."""
+        name = f"{m.paralon_agent_unit} on {m.paralon_agent}"
+        try:
+            unit = SystemdControl(self.docker(m.paralon_agent),
+                                  m.paralon_agent_unit).agent()
+        except (AgentError, ValueError) as exc:
+            self.add(g, name, FAIL, str(exc), "systemctl --user needs the "
+                     "user's systemd instance: loginctl enable-linger USER")
+            return
+        if unit is None:
+            self.add(g, name, FAIL, "unit not loaded",
+                     "check the name: systemctl --user list-units 'paralon*'")
+        else:
+            self.add(g, name, PASS, "systemctl --user works ("
+                     + ("active" if unit.running else "not active") + ")")
 
     def check_prices(self):
         g = GROUPS[5]

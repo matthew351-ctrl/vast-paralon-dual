@@ -131,6 +131,18 @@ class DoctorTests(TempDirMixin, unittest.TestCase):
         del self.raw["machines"][0]["paralon_agent"]
         self.assertEqual(self.status(self.rows(), "machine 111"), WARN)
 
+    def test_agent_control_systemd_and_none(self):
+        self.raw["machines"][0].update(agent_control="systemd",
+                                       paralon_agent_unit="paralon-agent.service")
+        self.docker.unit_state = ("loaded", "active")
+        name = "paralon-agent.service on me@gpu1"
+        self.assertEqual(self.status(self.rows(), name), PASS)
+        self.docker.unit_state = ("not-found", "inactive")
+        self.assertEqual(self.status(self.rows(), name), FAIL)
+        self.raw["machines"][0] = {"vast_machine_id": 111, "paralon_node_id": "node-1",
+                                   "agent_control": "none"}
+        self.assertEqual(self.status(self.rows(), "machine 111"), PASS)
+
     def test_relist_prices(self):
         names = [r for r in self.rows() if r.group == "relist prices"]
         self.assertEqual(names[0].status, PASS)

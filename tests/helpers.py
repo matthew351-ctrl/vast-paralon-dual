@@ -225,6 +225,24 @@ class FakeDocker:
         for cid in ids:
             self.get(cid).running = False
 
+    # v0.8.0: a shell line (systemd agent control). `unit_state` is what
+    # `systemctl --user show` reports; start/stop change it.
+    unit_state = ("loaded", "inactive")
+
+    def shell(self, script, what):
+        self.shells = getattr(self, "shells", []) + [script]
+        if self.fail_read:
+            raise AgentError("ssh: connect timed out")
+        verb = script.split("systemctl --user ", 1)[1].split()[0]
+        if verb in ("start", "stop"):
+            self.writes.append(("systemctl " + verb, script.rsplit(" ", 1)[1]))
+            if self.fail_write:
+                raise AgentError(f"systemctl {verb} exited 1")
+            self.unit_state = (self.unit_state[0],
+                               "active" if verb == "start" else "inactive")
+            return ""
+        return "LoadState=%s\nActiveState=%s\n" % self.unit_state
+
     def start(self, cid):
         self.writes.append(("start", cid))
         if self.fail_write:

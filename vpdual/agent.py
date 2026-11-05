@@ -26,6 +26,12 @@ It also reads the machine itself (`machine_state`): which containers run,
 and whether the GPU is free (nvidia-smi: compute processes and memory in use).
 Decisions come from that, with Vast's rental count only as a hint.
 
+How the agent itself is stopped and started is the machine's
+`agent_control` (v0.8.0, AgentControl below): "docker" (the default, the
+container above), "systemd" (`systemctl --user stop|start <paralon_agent_unit>`
+over the same local / ssh path; the containers it started are still killed
+with docker) or "none" (the agent is never touched).
+
 It also keeps Paralon's Jupyter image on the machine (`pin_jupyter`). Paralon
 rents a node only while that image is present, and Vast's daemon deletes
 images no container uses within minutes once images pass 10% of the disk. A
@@ -205,6 +211,81 @@ def agent_of(containers):
     return next((c for c in agents if c.running), agents[0] if agents else None)
 
 
+AGENT_CONTROLS = ("docker", "systemd", "none")
+UNIT_RE = re.compile(r"^[A-Za-z0-9_.@:-]+$")   # a unit name, never an option
+_USER_SYSTEMCTL = ("XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)} "
+                   "systemctl --user")
+
+
+class DockerControl:
+    """The agent is a container (agent_of); stop / start it with docker."""
+    managed = True
+
+    def __init__(self, host):
+        self.host = host
+
+    def agent(self, containers):
+        return agent_of(containers)
+
+    def stop(self, agent):
+        self.host.stop([agent.id])
+
+    def start(self, agent):
+        self.host.start(agent.id)
+
+
+class SystemdControl:
+    """The agent is a systemd --user unit on the machine (v0.8.0). Its state
+    is the unit's, read with one `systemctl --user show`; a unit that is not
+    loaded reads as no agent. XDG_RUNTIME_DIR is filled in for a service
+    with no login session (`systemctl --user` needs it)."""
+    managed = True
+
+    def __init__(self, host, unit):
+        if not UNIT_RE.match(unit or "") or unit.startswith("-"):
+            raise ValueError(f"not a systemd unit name: {unit!r}")
+        self.host, self.unit = host, unit
+
+    def _systemctl(self, *args):
+        return self.host.shell(" ".join((_USER_SYSTEMCTL,) + args + (
+            "--", shlex.quote(self.unit))), f"systemctl --user {args[0]}")
+
+    def agent(self, containers=None):
+        props = dict(ln.partition("=")[::2] for ln in self._systemctl(
+            "show", "-p", "LoadState", "-p", "ActiveState").splitlines())
+        if props.get("LoadState") != "loaded":
+            return None
+        return Container(self.unit, f"systemd:{self.unit}", self.unit,
+                         props.get("ActiveState") == "active")
+
+    def stop(self, agent):
+        self._systemctl("stop")
+
+    def start(self, agent):
+        self._systemctl("start")
+
+
+class NoControl:
+    """agent_control "none": the tool never stops or starts the agent (nor
+    kills what it started), and never waits for it."""
+    managed = False
+
+    def agent(self, containers=None):
+        return None
+
+
+def agent_control(machine, docker):
+    """The AgentControl for a config Machine; `docker` is target ->
+    DockerHost (a fake in tests)."""
+    kind = getattr(machine, "agent_control", "docker")
+    if kind == "none" or not machine.paralon_agent:
+        return NoControl()
+    host = docker(machine.paralon_agent)
+    if kind == "systemd":
+        return SystemdControl(host, machine.paralon_agent_unit)
+    return DockerControl(host)
+
+
 def leftovers(containers):
     """Running Paralon containers other than the agent and a rental: its
     inference workers, model downloads, benchmarks."""
@@ -245,6 +326,10 @@ class DockerHost:
 
     def _docker(self, *args):
         return self._exec(self._cmd(list(args)), f"docker {args[0]}")
+
+    def shell(self, script, what):
+        """One shell line on the machine (sh -c, or the ssh command)."""
+        return self._exec(self._remote(script), what)
 
     def pin_jupyter(self):
         """Pin Paralon's Jupyter image. Returns the script's lines: 'absent',
