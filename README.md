@@ -8,6 +8,21 @@ touches the Vast daemon, its packages or its containers. On each GPU machine
 it stops and starts only Paralon's agent, the containers that agent started,
 and your own idle job if you name one (`idle_job_images`).
 
+## What's new in 0.7.0
+
+- **The page no longer reads both sides itself.** The `run` service writes
+  a status snapshot after every pass (`status.json` beside the state file)
+  and `ui` serves it: an open page costs no `vastai`, Paralon or SSH call.
+  Only when the service has not written one lately does the page read live,
+  and it says which ("from the service, N s ago" or "live read").
+- **An optional login for the web UI.** Set `VPDUAL_UI_PASSWORD` and the
+  page asks for it. `ui --host` on a non-loopback address now refuses to
+  start without it, unless you pass `--no-login`.
+- **Relist backoff.** A machine Vast will not relist (unverified, de-listed)
+  is tried 5 times, then every 10 minutes, with one warning, instead of
+  every pass forever.
+- The web UI keeps its connection open between refreshes (HTTP/1.1).
+
 ## What's new in 0.6.1
 
 - **`init` suggests the pairs.** Where a Paralon node's name matches a Vast
@@ -235,6 +250,16 @@ hover, keyboard focus or tap. It refreshes every 15 s. It is the
 same data as `status` (`GET /api/status` serves it as JSON) and, like
 `status`, it writes nothing to Vast or Paralon.
 
+Where the data comes from: the running `run` service writes it after every
+pass, from that pass's own reads, to `status.json` next to the state file,
+and the page serves that file while it is younger than three
+`poll_interval_s`; the header says "from the service, N s ago". So an open
+page, or several, costs no `vastai`, Paralon or SSH call at all. If the
+service is not running (or no machine has a mode yet), the page reads both
+sides itself, as `status` does, and says "live read (service not
+running?)". A mode you switch shows on the page at once; the service
+applies it on its next pass.
+
 Each machine has a vast / paralon / dual switch. After a confirm, the mode is
 **saved** to the state file, as `mode` does, and nothing else: the running
 `run` service applies it on its next pass (within `poll_interval_s`). The
@@ -260,8 +285,19 @@ sent: the page says only whether it is set and where it is read from; change
 it with `init` or by editing the `env` file next to the config. With
 `--dry-run` the page shows the changes and saves nothing.
 
-It listens on **127.0.0.1 only** by default (port 8787). There is no login:
-anyone who can open the page can switch modes and edit the config. To use it from your phone or
+It listens on **127.0.0.1 only** by default (port 8787). Without a login,
+anyone who can open the page can switch modes and edit the config. To
+require one, set a password in the environment of the `ui` process:
+
+```sh
+VPDUAL_UI_PASSWORD='a long passphrase' python3 vast_paralon_dual.py ui
+```
+
+The page then asks for it (5 wrong tries lock that address out for 5
+minutes), and a login lasts 12 hours or until `ui` restarts; Log out ends it.
+Every `/api/*` call needs the login, and a switch or save still needs the
+page's token. The page is plain HTTP, so the password crosses the network
+unencrypted when it is not on loopback. To use it from your phone or
 another computer, prefer an SSH tunnel:
 
 ```sh
@@ -271,7 +307,9 @@ ssh -L 8787:127.0.0.1:8787 you@gpu-host     # then http://127.0.0.1:8787 there
 `--host 0.0.0.0` (or a LAN address) serves it to your whole network and
 prints a warning saying so; only do that on a network you trust, and open it
 by IP address (other host names are refused, which stops DNS-rebinding
-pages). A switch or a save needs a random token from the page, changed each
+pages). Since 0.7.0 it **refuses to start** off loopback without
+`VPDUAL_UI_PASSWORD`, unless you pass `--no-login` to accept that anyone who
+can reach it can use it. A switch or a save needs a random token from the page, changed each
 time `ui` starts, and is refused from any other web site.
 
 ## How it decides
@@ -413,7 +451,10 @@ A relist or unlist is checked two ways: the CLI is run with `--raw` and its
 JSON reply must say `success`, because `vastai` exits 0 and prints only a
 message when the server refuses; and the "owed" flag is cleared only when
 the next read shows the side back. If the Paralon node disappears from your
-account while a Vast relist is owed, the relist still happens.
+account while a Vast relist is owed, the relist still happens. A relist that
+Vast keeps refusing (an unverified or de-listed machine) is sent on 5 passes,
+then once every 10 minutes, with one warning in the log, until the read
+shows the machine listed.
 
 Config prices are only a fallback, for terms nothing was saved for, for
 example a machine you unlisted by hand before installing and then switch to
