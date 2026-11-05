@@ -1,4 +1,4 @@
-"""Command line: init | status | mode | run | ui | service."""
+"""Command line: init | doctor | status | mode | run | ui | service."""
 
 import argparse
 import logging
@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from . import __version__
+from . import __version__, doctor
 from .config import ConfigError, config_path, load_config
 from .docker_events import start_watcher
 from .engine import Controller
@@ -107,6 +107,30 @@ def publish_status(ctl, cfg, ok):
                     exc)
 
 
+def cmd_doctor(cfg_path, out=print, **kw):
+    """v0.8.0: every check as a PASS/WARN/FAIL row; exit 1 on any FAIL."""
+    rows = doctor.run_checks(cfg_path, **kw)
+    for line in doctor.lines(rows):
+        out(line)
+    return doctor.exit_code(rows)
+
+
+def startup_checks(cfg_path, **kw):
+    """v0.8.0: `run` makes doctor's checks first and refuses to start on a
+    FAIL in doctor.BLOCKING (exit 2; --skip-doctor bypasses). Under systemd
+    the refusal repeats each restart, which is one GET /nodes per 30 s."""
+    rows = doctor.run_checks(cfg_path, **kw)
+    for line in doctor.lines(rows):
+        log.info("doctor: %s", line)
+    bad = doctor.blocking(rows)
+    for r in bad:
+        log.error("not starting: %s / %s: %s (fix: %s)", r.group, r.name,
+                  r.detail, r.hint)
+    if bad:
+        log.error("fix the above, or start with --skip-doctor")
+    return not bad
+
+
 def cmd_mode(ctl, mode, machine_id):
     ctl.set_mode(mode, machine_id)
     if ctl.dry_run:
@@ -153,7 +177,11 @@ def build_parser():
     m.add_argument("mode", choices=MODES)
     m.add_argument("machine", nargs="?", type=int,
                    help="one Vast machine id (default: all)")
-    sub.add_parser("run", help="watch both sides and apply the rules")
+    r = sub.add_parser("run", help="watch both sides and apply the rules")
+    r.add_argument("--skip-doctor", action="store_true",
+                   help="start even if a start-up check fails (v0.8.0)")
+    sub.add_parser("doctor", help="check the install: vastai, the key, the "
+                                  "config, ids, Docker, state (read-only)")
     u = sub.add_parser("ui", help="a local web page: status, and a mode "
                                   "switch per machine")
     u.add_argument("--host", default=DEFAULT_HOST,
@@ -181,10 +209,15 @@ def main(argv=None):
     if args.cmd == "service":
         sys.stdout.write(render_service(cfg_path))
         return 0
+    if args.cmd == "doctor":
+        return cmd_doctor(cfg_path)
     try:
         cfg = load_config(cfg_path)
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.cmd == "run" and not args.skip_doctor \
+            and not startup_checks(cfg_path):
         return 2
     try:
         ctl = build(cfg, args.dry_run)

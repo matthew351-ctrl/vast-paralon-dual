@@ -78,7 +78,8 @@ class Init(TempDirMixin, unittest.TestCase):
         return run_init(args, env=self.env if env is None else env,
                         which=which, ask=ask or Answers(), out=self.out.append,
                         vast=vast or FixtureVast(),
-                        paralon=paralon or FixtureParalon())
+                        paralon=paralon or FixtureParalon(),
+                        doctor=lambda: ["doctor ran"])
 
     def loaded(self):
         return load_config(self.cfg_path, env={"PARALON_API_KEY": KEY})
@@ -160,7 +161,8 @@ class Init(TempDirMixin, unittest.TestCase):
                          "--agent", "12345=me@gpu1")
         code = run_init(args, env=self.env, which=lambda b: "/usr/bin/vastai",
                         ask=Answers(), out=self.out.append, vast=FixtureVast(),
-                        paralon=FixtureParalon(), docker=d)
+                        paralon=FixtureParalon(), docker=d,
+                        doctor=lambda: ["doctor ran"])
         self.assertEqual(code, 0, self.out)
         self.assertEqual(self.loaded().machines[0].paralon_agent, "me@gpu1")
         self.assertEqual(d.targets, ["me@gpu1"])
@@ -183,7 +185,8 @@ class Init(TempDirMixin, unittest.TestCase):
         code = run_init(init_args(self.cfg_path), env=self.env,
                         which=lambda b: "/usr/bin/vastai", ask=ask,
                         out=self.out.append, vast=FixtureVast(),
-                        paralon=FixtureParalon(), docker=d)
+                        paralon=FixtureParalon(), docker=d,
+                        doctor=lambda: ["doctor ran"])
         self.assertEqual(code, 0, self.out)
         self.assertEqual(self.loaded().machines[0].paralon_agent, "local")
         self.assertIn("no Paralon agent container found", "\n".join(self.out))

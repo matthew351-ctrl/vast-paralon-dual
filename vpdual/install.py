@@ -232,7 +232,7 @@ def _write_private(path, text, mode=0o600):
 
 
 def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
-             vast=None, paralon=None, docker=DockerHost):
+             vast=None, paralon=None, docker=DockerHost, doctor=None):
     """Returns an exit code. `vast` / `paralon` are injectable for tests."""
     env = os.environ if env is None else env
     cfg_path = config_path(args.config)
@@ -359,6 +359,16 @@ def run_init(args, *, env=None, which=shutil.which, ask=input, out=print,
     out("  2. Start the service (runs as you, on every boot):")
     out(f"       {service_command(cfg_path)}")
     out("     Follow it with: journalctl -u vast-paralon-dual -f")
+    # v0.8.0: the doctor table last, so a problem is the last thing shown.
+    # Informational: init has written its files either way (exit 0).
+    out("\nChecks (`doctor`; run it again after a fix):")
+    if doctor is None:
+        from .doctor import lines, run_checks
+        doctor = lambda: lines(run_checks(   # noqa: E731
+            cfg_path, env=env, which=which, vast=vast, paralon=paralon,
+            docker=None if docker is DockerHost else docker))
+    for line in doctor():
+        out("  " + line)
     return 0
 
 

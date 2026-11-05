@@ -63,7 +63,8 @@ class InitSuggests(TempDirMixin, unittest.TestCase):
         ask = Answers(*answers)
         code = run_init(init_args(self.cfg_path), env={"PARALON_API_KEY": KEY},
                         which=lambda b: "/usr/bin/vastai", ask=ask,
-                        out=self.out.append, vast=self.vast, paralon=self.paralon)
+                        out=self.out.append, vast=self.vast, paralon=self.paralon,
+                        doctor=lambda: ["doctor ran"])
         self.assertEqual(code, 0, self.out)
         cfg = load_config(self.cfg_path, env={"PARALON_API_KEY": KEY})
         return ask, [(m.vast_machine_id, m.paralon_node_id) for m in cfg.machines]
