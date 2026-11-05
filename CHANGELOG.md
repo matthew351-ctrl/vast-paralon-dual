@@ -1,6 +1,10 @@
 # Changelog
 
-Newest first. A release's section is its tag's notes.
+Newest first. A release's section is its tag's notes. "Paralon API" in
+each section names the responses that release's tests were written
+against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
+(`available`) and `POST /nodes/{id}/reclaim`, on
+`https://paraloncloud.com/api/v1`.
 
 ## 0.8.0
 
@@ -30,9 +34,17 @@ Public-readiness release.
   works; `python -m vpdual`; `service` writes a unit for a pipx install too.
   GitHub Actions: pytest on Python 3.8, 3.10 and 3.12, `ruff check`
   (E, F, W; line length 100). The code is ruff-clean.
+- **`status --json`**, the bug-report attachment: versions, the `doctor`
+  summary, the last 10 decisions per machine; ssh targets and the key
+  redacted. README: "Reporting a problem" (community-maintained, not
+  supported by Paralon or Vast).
 - README: a risk statement at the top, pipx install first, the staged quick start (install,
   key, init, doctor, run unarmed, check, arm), more known limits; the
   "What's new" sections moved here.
+
+Paralon API: unchanged since 0.6.0 -- the `GET /nodes` shape in
+`tests/fixture_paralon_nodes.json` (captured 2026-11-04); not re-checked
+against the live API for this release.
 
 **Migrating from 0.7.x:** nothing to do. A config without `"armed"` is
 armed, so an existing install keeps acting exactly as before. Only a config
@@ -55,6 +67,8 @@ FAIL rows and their fixes (or add `--skip-doctor` to the unit's `run`).
   every pass forever.
 - The web UI keeps its connection open between refreshes (HTTP/1.1).
 
+Paralon API: as 0.6.0 (no new call).
+
 ## 0.6.1
 
 - **`init` suggests the pairs.** Where a Paralon node's name matches a Vast
@@ -67,6 +81,8 @@ FAIL rows and their fixes (or add `--skip-doctor` to the unit's `run`).
   from the read the page already makes (no extra calls), with the node
   pre-selected by the same name match. You still review the change and
   save it; "Type the ids instead" adds one by hand.
+
+Paralon API: as 0.6.0.
 
 ## 0.6.0
 
@@ -118,3 +134,7 @@ created-but-never-started container on that image, which makes the delete
 refuse.
 
 Earlier releases (0.1 to 0.5.x): see the git history.
+
+Paralon API: `GET /nodes` as in `tests/fixture_paralon_nodes.json`,
+as committed with this release (2026-11-04).
+

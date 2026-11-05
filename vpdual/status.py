@@ -214,6 +214,39 @@ def publish_snapshot(ctl, cfg, pass_ok, clock):
     return path
 
 
+REPORT_DECISIONS = 10
+AGENT_REDACTED = "user@host"
+
+
+def report(ctl, cfg, machine_id=None, *, doctor_summary=None,
+           vastai_version=None):
+    """`status --json` (v0.8.0), the bug-report attachment: status_data plus
+    the tool's and Python's version, `vastai --version`, doctor's summary
+    and the last REPORT_DECISIONS decisions per machine. Nothing personal
+    beyond the user's own machine ids and names: every ssh paralon_agent
+    (user@host) reads AGENT_REDACTED wherever it appears, and the key is
+    never in it."""
+    import json
+    import platform
+    from . import __version__
+    last = {m.vast_machine_id: [dict(d) for d in
+                                ctl.mstate(m)["decisions"][-REPORT_DECISIONS:]]
+            for m in ctl.targets(machine_id)}     # before status_data's pass
+    data = status_data(ctl, cfg, machine_id)
+    for row in data["machines"]:
+        row["decisions"] = last.get(row["vast_machine_id"], [])
+    data.update(version=__version__, python=platform.python_version(),
+                vastai_version=vastai_version, doctor=doctor_summary)
+    text = json.dumps(data, indent=2, sort_keys=True, default=str)
+    for t in sorted({m.paralon_agent for m in cfg.machines
+                     if m.paralon_agent and m.paralon_agent != "local"},
+                    key=len, reverse=True):
+        text = text.replace(t, AGENT_REDACTED)
+    if cfg.paralon_api_key:
+        text = text.replace(cfg.paralon_api_key, "<redacted>")
+    return text
+
+
 def status_lines(s):
     """The `status` text, line by line (a line may start with "\\n")."""
     lines = [f"policy: {s['policy']}"]

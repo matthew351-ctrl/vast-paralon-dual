@@ -17,7 +17,7 @@ from .engine import Controller
 from .install import add_init_args, render_service, run_init
 from .paralon import ParalonClient
 from .state import MODES, StateStore
-from .status import publish_snapshot, status_data, status_lines
+from .status import publish_snapshot, report, status_data, status_lines
 from .vast import VastCLI
 from .webui import DEFAULT_HOST, DEFAULT_PORT, PASSWORD_ENV, serve
 
@@ -176,9 +176,18 @@ def cmd_mode(ctl, mode, machine_id):
     return 0
 
 
-def cmd_status(ctl, cfg, machine_id, out=print):
+def cmd_status(ctl, cfg, machine_id, out=print, as_json=False,
+               cfg_path=None):
     """Both sides, owed relists, and what one pass would do. Writes nothing.
-    The same data the web UI serves as GET /api/status."""
+    The same data the web UI serves as GET /api/status. `--json` (v0.8.0):
+    status.report(), the file to attach to a bug report."""
+    if as_json:
+        rows = doctor.run_checks(cfg_path) if cfg_path else None
+        ver = doctor.vastai_version(getattr(ctl.vast, "binary", cfg.vastai_bin))
+        out(report(ctl, cfg, machine_id,
+                   doctor_summary=doctor.summary(rows) if rows else None,
+                   vastai_version=".".join(map(str, ver)) if ver else None))
+        return 0
     for line in status_lines(status_data(ctl, cfg, machine_id)):
         out(line)
     return 0
@@ -210,6 +219,9 @@ def build_parser():
     s = sub.add_parser("status", help="both sides and what a pass would do "
                                       "(writes nothing)")
     s.add_argument("machine", nargs="?", type=int, help="one Vast machine id")
+    s.add_argument("--json", action="store_true",
+                   help="everything a bug report needs, as JSON (ssh "
+                        "targets and the key redacted; runs doctor)")
     m = sub.add_parser("mode", help="switch: vast only, paralon only, or dual")
     m.add_argument("mode", choices=MODES)
     m.add_argument("machine", nargs="?", type=int,
@@ -276,7 +288,8 @@ def main(argv=None):
         if args.cmd == "ui":
             return cmd_ui(ctl, cfg, args.host, args.port, cfg_path,
                           no_login=args.no_login)
-        return cmd_status(ctl, cfg, args.machine)
+        return cmd_status(ctl, cfg, args.machine, as_json=args.json,
+                          cfg_path=cfg_path)
     except ValueError as exc:      # unknown machine id
         print(f"error: {exc}", file=sys.stderr)
         return 2

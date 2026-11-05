@@ -62,6 +62,28 @@ def _vtext(v):
     return ".".join(map(str, v))
 
 
+def vastai_version(binary, runner=subprocess.run):
+    """`vastai --version` as a tuple, or None."""
+    try:
+        res = runner([binary, "--version"], capture_output=True, text=True,
+                     timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _version(res.stdout or res.stderr) if res.returncode == 0 else None
+
+
+def summary(rows):
+    """For `status --json` (v0.8.0): counts, and each non-PASS row's group,
+    check and status -- never its detail or hint, which can name paths,
+    hosts or users. An agent's check is named by its user@host: dropped."""
+    return {"pass": sum(r.status == PASS for r in rows),
+            "warn": sum(r.status == WARN for r in rows),
+            "fail": sum(r.status == FAIL for r in rows),
+            "problems": [{"group": r.group, "status": r.status,
+                          "check": "agent" if r.group == GROUPS[4] else r.name}
+                         for r in rows if r.status in (WARN, FAIL)]}
+
+
 def _raw_config(path):
     """The config as JSON, for the few settings the early checks need even
     when it does not validate. {} if unreadable (the config check says why)."""
@@ -135,11 +157,7 @@ class Doctor:
             return
         self.binary = binary
         self.add(g, "vastai found", PASS, binary)
-        try:
-            res = self._run([binary, "--version"])
-            ver = _version(res.stdout or res.stderr) if res.returncode == 0 else None
-        except (OSError, subprocess.SubprocessError):
-            ver = None
+        ver = vastai_version(binary, self.runner)
         tested = _version(VASTAI_TESTED)
         if ver is None:
             self.add(g, "vastai version", FAIL, "`vastai --version` gave no "

@@ -164,7 +164,7 @@ commands that carry it.
 vast_paralon_dual.py [-c CONFIG] init [options]
 vast_paralon_dual.py [-c CONFIG] doctor
 vast_paralon_dual.py [-c CONFIG] arm [--skip-doctor]
-vast_paralon_dual.py [-c CONFIG] status [VAST_MACHINE_ID]
+vast_paralon_dual.py [-c CONFIG] status [--json] [VAST_MACHINE_ID]
 vast_paralon_dual.py [-c CONFIG] [--dry-run] mode vast|paralon|dual [VAST_MACHINE_ID]
 vast_paralon_dual.py [-c CONFIG] [--dry-run] [-v] run [--skip-doctor]
 vast_paralon_dual.py [-c CONFIG] [--dry-run] ui [--host HOST] [--port PORT]
@@ -185,7 +185,10 @@ vast_paralon_dual.py [-c CONFIG] service
   apply it.
 - `status`: per machine, both sides, owed relists, whether the Paralon agent
   is running, the listing a relist would use, what the next pass would do and
-  the last decisions. Writes nothing.
+  the last decisions. Writes nothing. `--json`: the same as JSON plus the
+  tool's, Python's and `vastai`'s versions, the `doctor` summary and the
+  last 10 decisions per machine -- the file to attach to a bug report
+  (see Reporting a problem).
 - `mode`: saves the mode for one machine (or all) and applies it once. The
   running service re-reads the state file at the start of every pass, so it
   follows the change from its next pass; a lock file next to the state file
@@ -654,6 +657,28 @@ container can be removed with `docker rm`.
   for the 2-minute notice.
 - Stopping a Vast default job takes Vast a few seconds; the immediate stop on
   a rental container starting narrows that window but cannot close it.
+
+## Reporting a problem
+
+This tool is community-maintained. It is **not** made, endorsed or supported
+by Paralon or by Vast.ai: report its problems here (GitHub issues), not to
+them.
+
+Attach:
+
+1. `vast-paralon-dual status --json > status.json` (from a clone:
+   `python3 vast_paralon_dual.py status --json`). It holds the versions,
+   the `doctor` summary, both sides as the tool reads them, what the next
+   pass would do and the last 10 decisions per machine. The Paralon key is
+   never in it and every ssh `paralon_agent` (`user@host`) reads
+   `user@host`; your machine ids, node ids and machine names are in it --
+   edit them out if you prefer.
+2. The log around the problem: `journalctl -u vast-paralon-dual --since
+   "1 hour ago"` (read it first: it has your machine ids and, for an ssh
+   error, your `user@host`).
+3. What you expected, and what happened instead.
+
+Never post your config's `env` file, your Paralon key or your Vast API key.
 
 ## Compliance
 
