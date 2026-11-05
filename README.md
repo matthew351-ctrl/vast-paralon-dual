@@ -1,5 +1,11 @@
 # vast-paralon-dual
 
+> **Read this first.** This tool unlists and relists your Vast machine and
+> pauses and resumes your Paralon node on its own. A mistake in its config,
+> or in this tool, costs you rental income on either side. Install it, run
+> `doctor`, run it unarmed (the default after `init`) for a day, read
+> `status`, and only then arm it.
+
 Rent your GPU machines on **Vast.ai** and **Paralon Cloud** at the same time,
 or switch each one fully to one of them. A Vast renter always wins the GPU.
 
@@ -8,82 +14,7 @@ touches the Vast daemon, its packages or its containers. On each GPU machine
 it stops and starts only Paralon's agent, the containers that agent started,
 and your own idle job if you name one (`idle_job_images`).
 
-## What's new in 0.7.0
-
-- **The page no longer reads both sides itself.** The `run` service writes
-  a status snapshot after every pass (`status.json` beside the state file)
-  and `ui` serves it: an open page costs no `vastai`, Paralon or SSH call.
-  Only when the service has not written one lately does the page read live,
-  and it says which ("from the service, N s ago" or "live read").
-- **An optional login for the web UI.** Set `VPDUAL_UI_PASSWORD` and the
-  page asks for it. `ui --host` on a non-loopback address now refuses to
-  start without it, unless you pass `--no-login`.
-- **Relist backoff.** A machine Vast will not relist (unverified, de-listed)
-  is tried 5 times, then every 10 minutes, with one warning, instead of
-  every pass forever.
-- The web UI keeps its connection open between refreshes (HTTP/1.1).
-
-## What's new in 0.6.1
-
-- **`init` suggests the pairs.** Where a Paralon node's name matches a Vast
-  machine's hostname (ignoring case, spaces and dashes; exact, then prefix,
-  then a close match), that node is offered as the default: Enter takes it,
-  `-` skips, a number picks another. Nothing is paired without your answer,
-  and `--pair` works as before.
-- **Add a machine from a list.** The Settings tab's "Add a machine" offers
-  your Vast machines and Paralon nodes that the config does not have yet,
-  from the read the page already makes (no extra calls), with the node
-  pre-selected by the same name match. You still review the change and
-  save it; "Type the ids instead" adds one by hand.
-
-## What's new in 0.6.0
-
-- **A web page: `ui`.** `python3 vast_paralon_dual.py ui` serves a local
-  page (standard library only, nothing loaded from the internet) with each
-  machine's Vast and Paralon side, what the next pass would do and the last
-  decisions, as a grid of cards or a table. It is the same data as `status`.
-  See [Web UI](#web-ui).
-- **Machine names.** An optional `name` per machine in the config; without
-  one, the hostname Vast reports for your machine is shown, else its id.
-  `status` shows them too.
-- **Mode switch from the page.** vast / paralon / dual per machine, after a
-  confirm. It is saved to the state file only; the running service applies
-  it on its next pass, so it stays the only process acting on Vast and
-  Paralon.
-- **Settings tab.** Edit the config from the page: every setting with its
-  unit and default, and your machines. Changes are checked by the same
-  validator the tool uses, shown as a diff before saving, backed up, and
-  written atomically with mode 600. It refuses to remove a machine the tool
-  still owes a relist. The API key is never shown.
-- **Light and dark.** Follows your system, or an Auto / Light / Dark switch.
-- **Help on every term.** An (i) beside each label explains it, on hover,
-  keyboard focus or tap, and always opens fully on screen.
-- **Safe by default.** It listens on 127.0.0.1 only; a LAN address prints a
-  warning. Every change needs a per-run token from the page and is refused
-  from other web sites and from unexpected host names.
-
-**Set `paralon_agent` for every machine.** It is how the tool runs `docker`
-on the machine (`local`, or `user@host` over ssh), and the protections need
-it: seeing a renter from the machine's own containers, acting on
-`docker events` within seconds, stopping Paralon's agent and its leftovers
-during a Vast rental, stopping your idle job during a Paralon rental, and
-waiting for the GPU to be free before handing it to the other side. Without
-it the tool has only Vast's running count and Paralon's API, read on a 60 s
-pass.
-
-**While Vast rents a machine, its Paralon agent is switched off.** A paused
-Paralon node's agent keeps starting inference workers, model downloads and
-GPU benchmarks by itself. Beside a Vast renter they take the renter's GPU
-memory, and when one is killed Paralon re-benchmarks the node, which can mark
-it failed. With the agent stopped nothing can start them; when the Vast
-renter leaves, the agent is started again.
-
-**Paralon's Jupyter image is kept on the machine.** Paralon rents a node only
-while `ghcr.io/paraloncloud/jupyter` is present ("not ready: no jupyter image
-present" otherwise), and Vast's daemon deletes images that no container uses
-within minutes once images pass 10% of the disk. Every pass, the tool keeps a
-created-but-never-started container on that image, which makes the delete
-refuse.
+What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 
 ## Before you start
 
@@ -141,7 +72,7 @@ where each machine is listed, and switches the agent off while Vast rents.
 ## Quick start
 
 Run these as your normal user on the control plane or the GPU machine (see
-above):
+above). Nothing is changed on Vast or Paralon until step 7.
 
 ```sh
 # 1. Install (Python 3.8+; pipx keeps the Vast CLI out of the system Python,
@@ -155,21 +86,32 @@ vastai set api-key YOUR_VAST_API_KEY
 #    "My nodes" permission)
 export PARALON_API_KEY=prlc_...
 
-# 3. Pair your Vast machines with Paralon nodes and choose the policy
+# 3. Pair your Vast machines with Paralon nodes and choose the policy.
+#    The config it writes is NOT ARMED ("armed": false).
 python3 vast_paralon_dual.py init
 
-# 4. Dry run: both sides, and what the tool would do. Changes nothing.
-python3 vast_paralon_dual.py status
+# 4. Check the install: every row PASS or WARN, each FAIL with its fix
+python3 vast_paralon_dual.py doctor
 
-# 5. Start the service (runs as you, starts on boot)
+# 5. Start the service, unarmed: it logs "NOT ARMED: would ..." for every
+#    decision and changes nothing (runs as you, starts on boot)
 python3 vast_paralon_dual.py service | sudo tee /etc/systemd/system/vast-paralon-dual.service >/dev/null
 sudo systemctl daemon-reload && sudo systemctl enable --now vast-paralon-dual
 journalctl -u vast-paralon-dual -f
+
+# 6. For a day: read what it would do (the web UI shows the same, under an
+#    amber "Not armed" banner)
+python3 vast_paralon_dual.py status
+python3 vast_paralon_dual.py ui            # http://127.0.0.1:8787
+
+# 7. Arm it (doctor runs again first), then restart the service
+python3 vast_paralon_dual.py arm
+sudo systemctl restart vast-paralon-dual
 ```
 
-`init` prints the exact commands for steps 4 and 5 when it finishes. Set each
-Paralon node to **spot** in the Paralon dashboard: only a spot rental can be
-reclaimed when a Vast renter arrives.
+`init` prints the exact commands for steps 5 to 7 when it finishes, then the
+`doctor` table. Set each Paralon node to **spot** in the Paralon dashboard:
+only a spot rental can be reclaimed when a Vast renter arrives.
 
 ## What `init` does
 
@@ -205,13 +147,27 @@ commands that carry it.
 
 ```
 vast_paralon_dual.py [-c CONFIG] init [options]
+vast_paralon_dual.py [-c CONFIG] doctor
+vast_paralon_dual.py [-c CONFIG] arm [--skip-doctor]
 vast_paralon_dual.py [-c CONFIG] status [VAST_MACHINE_ID]
 vast_paralon_dual.py [-c CONFIG] [--dry-run] mode vast|paralon|dual [VAST_MACHINE_ID]
-vast_paralon_dual.py [-c CONFIG] [--dry-run] [-v] run
+vast_paralon_dual.py [-c CONFIG] [--dry-run] [-v] run [--skip-doctor]
 vast_paralon_dual.py [-c CONFIG] [--dry-run] ui [--host HOST] [--port PORT]
 vast_paralon_dual.py [-c CONFIG] service
 ```
 
+- `doctor`: checks the install, one PASS / WARN / FAIL row each with a fix:
+  Python >= 3.8; `vastai` found, its version (>= 1.3.0; newer than the
+  tested one is a WARN) and its login; the Paralon key (environment, or the
+  `env` file at mode 600) and one `GET /nodes`; the config; every
+  `vast_machine_id` in `show machines` and every `paralon_node_id` in
+  `GET /nodes`; `docker ps` on each `paralon_agent` (over `ssh -o
+  BatchMode=yes` for `user@host`); a relist price per machine (WARN when the
+  config fallback would be used); the state file and its `.lock`; the
+  systemd unit (WARN only). Read-only. Exit 1 on any FAIL.
+- `arm`: sets `"armed": true` in the config (backed up first) after a
+  `doctor` with no FAIL in its first five groups; restart the service to
+  apply it.
 - `status`: per machine, both sides, owed relists, whether the Paralon agent
   is running, the listing a relist would use, what the next pass would do and
   the last decisions. Writes nothing.
@@ -224,7 +180,12 @@ vast_paralon_dual.py [-c CONFIG] service
   - `paralon`: Vast unlisted, Paralon available once no Vast renter is
     running (unlisting never evicts a renter).
 - `run`: the watcher (what the service runs). Machines with no mode are
-  skipped until one is set.
+  skipped until one is set. It makes the `doctor` checks first and refuses
+  to start (exit 2) on a FAIL in the first five groups (vastai, the
+  Paralon key, the config, the ids, Docker on each machine);
+  `--skip-doctor` starts anyway. Unarmed, it makes every decision and logs
+  it as `NOT ARMED: would ...`, but lists, unlists, pauses, reclaims, stops
+  and starts nothing.
 - `service`: prints the systemd unit filled in for your account, Python and
   paths (template: `systemd/vast-paralon-dual.service`).
 - `--dry-run`: logs what it would do; no API write, no state-file write.
@@ -631,6 +592,15 @@ container can be removed with `docker rm`.
 
 ## Known limits
 
+- **One Vast machine <-> one Paralon node.** Each pair is one GPU machine;
+  a machine split across several Paralon nodes, or one node over several
+  Vast machines, is not supported.
+- **A partial Vast rental counts as rented.** A renter on some of a
+  machine's GPUs pauses the Paralon node for the whole machine.
+- **The Paralon agent and your idle job must be Docker containers**: they
+  are stopped and started with `docker` (an idle job can also be a Vast
+  default job). An agent run as a systemd service or a bare process cannot
+  be managed yet; leave `paralon_agent` out for such a machine.
 - On a Vast host, the Paralon agent needs **Docker 29.2 or newer** to see the
   GPU. Upgrade using Vast's own host instructions; this tool does not.
 - Since 2026-10-26 Paralon runs no inference or render jobs on **spot**
