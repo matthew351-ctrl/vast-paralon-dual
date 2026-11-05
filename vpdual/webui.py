@@ -402,10 +402,15 @@ class UIApp:
             except OSError as exc:
                 log.error("ui: saving %s failed: %s", self.config_path, exc)
                 return 500, _err(f"could not save: {exc}")
-            self.cfg = cfg
-            if self.rebuild is not None:
-                self.vast, self.paralon = self.rebuild(cfg)
-            self._gen += 1
+            clients = self.rebuild(cfg) if self.rebuild is not None else None
+            # v0.7.0: under the status lock -- a status() read on another
+            # thread is mid controller() on cfg/vast/paralon; it must see the
+            # old set or the new one, never half of each.
+            with self._lock:
+                self.cfg = cfg
+                if clients is not None:
+                    self.vast, self.paralon = clients
+                self._gen += 1
             log.info("ui: config saved (%d change(s)); backup %s", len(rows),
                      dest)
             return 200, {
