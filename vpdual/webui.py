@@ -1006,6 +1006,10 @@ dl { display: grid; grid-template-columns: max-content minmax(0, 1fr);
 dt { color: var(--muted); white-space: nowrap; }
 dd { margin: 0; overflow-wrap: anywhere; }
 .yes { color: var(--ok); font-weight: 600; }
+/* v0.9.0: a short state's colour: ok, muted, warn, danger, or the side's own */
+.st-ok { color: var(--ok); } .st-mut { color: var(--muted); }
+.st-warn { color: var(--warn-fg); } .st-bad { color: var(--bad-fg); }
+.st-vast { color: var(--vast); } .st-para { color: var(--para); }
 .owed { color: var(--warn-fg); background: var(--warn-bg); font-weight: 600;
   border-radius: 4px; padding: 0 5px; }
 .line { font-size: .88rem; overflow-wrap: anywhere; }
@@ -1213,6 +1217,11 @@ const HELP = {
     "be reclaimed, so in dual mode both renters could share the GPU; " +
     "switch the node to spot in the Paralon dashboard.",
   paralon_price: "What a Paralon renter pays per hour for this node.",
+  offer_ends: "When this machine's Vast offer ends: the date, what is left, " +
+    "then the term. rolling N d: Vast moves the end forward every day. " +
+    "fixed end: it does not move; past it, Vast takes no new rentals. In " +
+    "red with under 7 days left on a fixed end, or under 1 day on a " +
+    "rolling one (the daily renewal is late).",
   owes: "What this tool itself took off and still has to put back: a Vast " +
     "relist, a Paralon un-pause, the Paralon agent's start, or your idle " +
     "job's start. Kept in the state file, so a restart never forgets it. " +
@@ -1540,6 +1549,33 @@ function when(t) {
 function busy() {
   return $("confirm").open || $("s-confirm").open || tipFor !== null;
 }
+// v0.9.0: "Offer ends" worded as "11-21 19:12 · 14 d left ·
+// rolling 7 d" -- the date, what is left, then the term; never a bare
+// number of days. Parts are [text, class] so the date can be red alone.
+function pad2(n) { return String(n).padStart(2, "0"); }
+function offerEnds(m, now) {
+  const v = m.vast;
+  if (!v || v.error !== null) return null;
+  if (!v.listed) return [["unlisted", "st-mut"]];
+  const l = v.listing || {};
+  const dur = typeof l.duration === "number" && l.duration > 0 ? l.duration : null;
+  const term = dur ? "rolling " + Math.max(1, Math.round(dur / 86400)) + " d" : "fixed end";
+  if (typeof l.end_date !== "number" || !isFinite(l.end_date))
+    return [[NOTHING, "st-mut"], [" · " + term, "st-mut"]];
+  const days = (l.end_date - (now === undefined ? Date.now() / 1000 : now)) / 86400;
+  const d = new Date(l.end_date * 1000);
+  const left = days >= 1 ? Math.round(days) + " d left" :
+    Math.max(0, Math.round(days * 24)) + " h left";
+  const hot = days < (dur ? 1 : 7) ? "st-bad" : "";
+  return [[pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " +
+           pad2(d.getHours()) + ":" + pad2(d.getMinutes()), hot],
+          [" · " + left, hot], [" · " + term, "st-mut"]];
+}
+function segs(parts) {
+  const s = el("span", "segs");
+  for (const [t, c] of parts) s.append(el("span", c || null, t));
+  return s;
+}
 function money(v) { return typeof v === "number" && isFinite(v) ? "$" + v : NOTHING; }
 
 // -- what each side is doing ------------------------------------------
@@ -1647,7 +1683,8 @@ function card(m, s) {
     const stored = Math.max(0, m.vast.resident - m.vast.running);
     const rows = [["State", vastShort(m), "vast_state"],
                   ["GPU", money(m.vast.listing.price_gpu), "vast_price"],
-                  ["Min bid", money(m.vast.listing.price_min_bid), "min_bid"]];
+                  ["Min bid", money(m.vast.listing.price_min_bid), "min_bid"],
+                  ["Offer ends", segs(offerEnds(m)), "offer_ends"]];
     if (stored) rows.splice(1, 0, ["Stored", stored, "stored"]);
     vs.append(dl(rows));
   }
@@ -1745,8 +1782,8 @@ function table(s) {
   const t = el("table");
   const head = el("tr");
   for (const [h, key] of [["Machine"], ["Mode", "mode"], ["Status", "status"],
-                          ["Vast", "vast_state"], ["Paralon", "paralon_state"],
-                          ["Next pass", "next_pass"]]) {
+                          ["Vast", "vast_state"], ["Offer ends", "offer_ends"],
+                          ["Paralon", "paralon_state"], ["Next pass", "next_pass"]]) {
     const th = el("th", null, h);
     if (key) th.append(info(key, h));
     head.append(th);
@@ -1775,7 +1812,10 @@ function table(s) {
     const nx = el("td", "next-cell", cell(nt !== null ? nt : next.join("; ")));
     const owed = owedText(m);
     if (owed) nx.append(el("div", "small muted", "owes: " + owed));
-    tr.append(name, md, st, el("td", null, vast), el("td", null, par), nx);
+    const oe = el("td", "nowrap");
+    const ends = offerEnds(m);
+    oe.append(ends ? segs(ends) : NOTHING);
+    tr.append(name, md, st, el("td", null, vast), oe, el("td", null, par), nx);
     tbody.append(tr);
   }
   t.append(thead, tbody);

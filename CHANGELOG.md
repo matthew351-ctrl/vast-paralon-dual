@@ -16,6 +16,11 @@ change to the config format, the HTTP API or what the service does.
   reads "—" everywhere, true / false read yes / no, and a value spelled
   `None`, `True`, `False`, `nan` reads the same; the settings diff shows an
   absent key as "— (not set)". The bare "-" placeholders are gone.
+- **Offer ends** on each card and in the table, worded "11-21 19:12 ·
+  14 d left · rolling 7 d": the date, what is left, then the term
+  (rolling N d, or fixed end), from the listing Vast already reports.
+  Red under 7 days left on a fixed end, or under 1 day on a rolling one;
+  an unlisted machine reads "unlisted".
 
 ## 0.8.0
 

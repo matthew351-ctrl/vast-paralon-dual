@@ -46,5 +46,32 @@ class CellFormatter(unittest.TestCase):
         self.assertNotIn('<b id="policy">-</b>', PAGE)
 
 
+class OfferEnds(unittest.TestCase):
+    def test_date_then_left_then_term(self):
+        src = js_function("offerEnds")
+        # "11-21 19:12 · 14 d left · rolling 7 d"
+        self.assertIn('pad2(d.getMonth() + 1) + "-" + pad2(d.getDate())', src)
+        self.assertIn('" d left"', src)
+        self.assertIn('" h left"', src)          # under a day: hours
+        self.assertIn('"rolling " + ', src)
+        self.assertIn('"fixed end"', src)
+        self.assertIn('[" · " + left, hot], [" · " + term, "st-mut"]', src)
+        # unlisted says so; no end date is "—", never a bare day count
+        self.assertIn('[["unlisted", "st-mut"]]', src)
+        self.assertIn('[[NOTHING, "st-mut"], [" · " + term, "st-mut"]]', src)
+        self.assertNotIn(".toFixed(1)", src)
+
+    def test_red_only_when_the_end_is_near(self):
+        # fixed end: under 7 days; rolling: under 1 day (renewal late)
+        self.assertIn('days < (dur ? 1 : 7) ? "st-bad" : ""',
+                      js_function("offerEnds"))
+
+    def test_shown_on_the_card_and_in_the_table(self):
+        self.assertIn('["Offer ends", segs(offerEnds(m)), "offer_ends"]',
+                      js_function("card"))
+        self.assertIn('["Offer ends", "offer_ends"]', js_function("table"))
+        self.assertIn("offer_ends:", PAGE)       # its (i) text
+
+
 if __name__ == "__main__":
     unittest.main()
