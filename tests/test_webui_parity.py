@@ -67,8 +67,10 @@ class OfferEnds(unittest.TestCase):
                       js_function("offerEnds"))
 
     def test_shown_on_the_card_and_in_the_table(self):
-        self.assertIn('["Offer ends", segs(offerEnds(m)), "offer_ends"]',
-                      js_function("card"))
+        card = js_function("card")
+        self.assertIn('oe.append(labelled("Offer ends", "offer_ends"), " ", segs(ends));',
+                      card)
+        self.assertNotIn('["Offer ends", segs(', card)   # not in a half-width column
         self.assertIn('label: "Offer ends", help: "offer_ends"', js_function("tableCols"))
         self.assertIn("offer_ends:", PAGE)       # its (i) text
 

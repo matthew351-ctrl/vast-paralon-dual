@@ -961,7 +961,7 @@ button.info::after { content: ""; position: absolute; inset: -9px; }
 /* v0.9.0: a state word that carries its own sentence as a tip */
 button.tipword { appearance: none; border: 0; background: none; padding: 0;
   margin: 0; min-height: 0; font: inherit; color: inherit; cursor: help;
-  text-align: left; text-decoration: underline dotted;
+  text-align: left; text-decoration: underline dotted; white-space: nowrap;
   text-underline-offset: 3px; text-decoration-color: var(--line-strong); }
 button.tipword.st-ok { color: var(--ok); } button.tipword.st-mut { color: var(--muted); }
 button.tipword.st-warn { color: var(--warn-fg); } button.tipword.st-bad { color: var(--bad-fg); }
@@ -1021,6 +1021,7 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .owed { color: var(--warn-fg); background: var(--warn-bg); font-weight: 600;
   border-radius: 4px; padding: 0 5px; }
 .line { font-size: .88rem; overflow-wrap: anywhere; }
+.line.offer > .nowrap:first-child { color: var(--muted); }
 .note { font-size: .85rem; border-radius: 6px; padding: 4px 8px; margin: 0;
   color: var(--warn-fg); background: var(--warn-bg); overflow-wrap: anywhere; }
 .note button.info { border-color: var(--warn-fg); color: var(--warn-fg); }
@@ -1793,8 +1794,7 @@ function card(m, s) {
     const stored = Math.max(0, m.vast.resident - m.vast.running);
     const rows = [["State", stateEl(vastState(m)), "vast_state"],
                   ["GPU", money(m.vast.listing.price_gpu), "vast_price"],
-                  ["Min bid", money(m.vast.listing.price_min_bid), "min_bid"],
-                  ["Offer ends", segs(offerEnds(m)), "offer_ends"]];
+                  ["Min bid", money(m.vast.listing.price_min_bid), "min_bid"]];
     if (stored) rows.splice(1, 0, ["Stored", stored, "stored"]);
     vs.append(dl(rows));
   }
@@ -1806,6 +1806,14 @@ function card(m, s) {
                      ["Price", cell(m.paralon.price), "paralon_price"]]));
   sides.append(vs, ps);
   c.append(sides);
+  // Offer ends on its own line under both sides: a half-width column
+  // wrapped "11-22 09:12 · 14 d left · rolling 14 d" word by word
+  const ends = offerEnds(m);
+  if (ends) {
+    const oe = el("div", "line offer");
+    oe.append(labelled("Offer ends", "offer_ends"), " ", segs(ends));
+    c.append(oe);
+  }
 
   const owed = owedText(m);
   if (owed) {
