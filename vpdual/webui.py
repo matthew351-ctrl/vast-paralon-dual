@@ -1111,7 +1111,7 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
         aria-controls="panel-settings" aria-selected="false"
         tabindex="-1">Settings</button>
     </nav>
-    <span class="muted small" id="policy-wrap">policy <b id="policy">-</b></span>
+    <span class="muted small" id="policy-wrap">policy <b id="policy">—</b></span>
     <span class="muted small" id="ago">loading...</span>
     <span class="spacer"></span>
     <span class="seg" id="view-seg" role="group" aria-label="View">
@@ -1482,8 +1482,23 @@ if (window.visualViewport) {
 }
 
 // -- helpers ----------------------------------------------------------
+// v0.9.0: ONE cell formatter: nothing (null, undefined,
+// NaN) reads "\u2014", true / false read yes / no, and a value whose text IS
+// one of those spellings (None, True, False, nan, NaN, null, undefined)
+// reads the same. Every value cell, table cell and settings diff uses it.
+const NOTHING = "\u2014";
+const SPELLED = {"None": NOTHING, "nan": NOTHING, "NaN": NOTHING,
+                 "null": NOTHING, "undefined": NOTHING,
+                 "True": "yes", "False": "no"};
+function cell(v) {
+  if (v === null || v === undefined || (typeof v === "number" && isNaN(v)))
+    return NOTHING;
+  if (v === true || v === false) return v ? "yes" : "no";
+  const t = String(v);
+  return Object.prototype.hasOwnProperty.call(SPELLED, t.trim()) ? SPELLED[t.trim()] : t;
+}
 function yesno(v, cls) {
-  return el("span", v ? (cls || "yes") : "", v ? "yes" : "no");
+  return el("span", v ? (cls || "yes") : "", cell(Boolean(v)));
 }
 function dl(rows) {   // [label, value, help key?]
   const d = el("dl");
@@ -1491,7 +1506,7 @@ function dl(rows) {   // [label, value, help key?]
     const dt = el("dt");
     dt.append(labelled(k, key));
     const dd = el("dd");
-    if (v instanceof Node) dd.append(v); else dd.textContent = String(v);
+    if (v instanceof Node) dd.append(v); else dd.textContent = cell(v);
     d.append(dt, dd);
   }
   return d;
@@ -1525,7 +1540,7 @@ function when(t) {
 function busy() {
   return $("confirm").open || $("s-confirm").open || tipFor !== null;
 }
-function money(v) { return typeof v === "number" ? "$" + v : "-"; }
+function money(v) { return typeof v === "number" && isFinite(v) ? "$" + v : NOTHING; }
 
 // -- what each side is doing ------------------------------------------
 function vastRenters(m) {
@@ -1641,7 +1656,7 @@ function card(m, s) {
   else if (m.paralon.error !== null) ps.append(el("div", "line", "not found"));
   else ps.append(dl([["State", paralonShort(m), "paralon_state"],
                      ["Type", m.paralon.spot ? "spot" : "ON-DEMAND", "paralon_type"],
-                     ["Price", m.paralon.price, "paralon_price"]]));
+                     ["Price", cell(m.paralon.price), "paralon_price"]]));
   sides.append(vs, ps);
   c.append(sides);
 
@@ -1754,10 +1769,10 @@ function table(s) {
     let par = paralonShort(m);
     if (m.paralon && m.paralon.error === null)
       par += " · " + (m.paralon.spot ? "spot" : "ON-DEMAND") + " · " +
-             m.paralon.price;
+             cell(m.paralon.price);
     const next = nextFor(m, s);
     const nt = nextText(m, next);
-    const nx = el("td", "next-cell", nt !== null ? nt : next.join("; "));
+    const nx = el("td", "next-cell", cell(nt !== null ? nt : next.join("; ")));
     const owed = owedText(m);
     if (owed) nx.append(el("div", "small muted", "owes: " + owed));
     tr.append(name, md, st, el("td", null, vast), el("td", null, par), nx);
@@ -1779,7 +1794,7 @@ function setView(v) {
 
 function render(s) {
   hideTip();
-  $("policy").textContent = s.policy;
+  $("policy").textContent = cell(s.policy);
   $("version").textContent = "vast-paralon-dual " + s.version;
   banner("not-armed", s.armed === false ? "Not armed: decisions are logged, " +
          "nothing is changed. Arm it in Settings." : null);
@@ -1984,8 +1999,9 @@ function fmtDefault(v, type) {
   return v === "" || v === null || v === undefined ? "none" : String(v);
 }
 function fmtValue(v) {
-  if (v === null || v === undefined) return "(not set)";
-  return typeof v === "string" ? v : JSON.stringify(v);
+  if (v === null || v === undefined) return NOTHING + " (not set)";
+  if (typeof v === "boolean" || typeof v === "string") return cell(v);
+  return JSON.stringify(v);
 }
 
 function fieldRow(label, helpKey, control, unit, hint, path) {

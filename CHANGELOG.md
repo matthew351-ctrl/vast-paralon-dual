@@ -6,6 +6,17 @@ against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
 (`available`) and `POST /nodes/{id}/reclaim`, on
 `https://paraloncloud.com/api/v1`.
 
+## 0.9.0 (unreleased)
+
+Web UI: one way to show values, clearer states, a phone layout for
+the table, core vs advanced settings and a tiered change flow. No
+change to the config format, the HTTP API or what the service does.
+
+- **One cell formatter** on the web page: a missing value (null, NaN)
+  reads "—" everywhere, true / false read yes / no, and a value spelled
+  `None`, `True`, `False`, `nan` reads the same; the settings diff shows an
+  absent key as "— (not set)". The bare "-" placeholders are gone.
+
 ## 0.8.0
 
 Public-readiness release.
