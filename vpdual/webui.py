@@ -1133,6 +1133,11 @@ button.danger { color: var(--bad-fg); border-color: var(--bad-line);
 .diff .added { color: var(--ok); }
 .diff .removed { color: var(--bad-fg); }
 dialog.wide { width: min(720px, calc(100vw - 32px)); }
+/* v0.9.0: the typed tier -- arming waits for "yes" */
+#s-typed label { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+#s-typed input { flex: 0 1 8rem; min-width: 0; font: inherit; padding: 5px 8px;
+  min-height: 34px; border-radius: 6px; border: 1px solid var(--line-strong);
+  background: var(--bg); color: var(--fg); }
 </style>
 </head>
 <body>
@@ -1196,6 +1201,12 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
   <div id="s-diff" class="diff"></div>
   <p id="s-after" class="muted small"></p>
   <p id="s-result" class="bad banner" role="alert" hidden></p>
+  <div id="s-typed" class="banner warn" hidden>
+    <label for="s-yes"><span>Type <b>yes</b> to arm: from its next start
+      the service changes your Vast listings and Paralon nodes itself.</span>
+      <input id="s-yes" type="text" autocomplete="off" spellcheck="false"
+        aria-describedby="s-typed"></label>
+  </div>
   <div class="actions">
     <button id="s-cancel" type="button">Cancel</button>
     <button id="s-save" type="button" class="primary">Save</button>
@@ -2643,16 +2654,23 @@ async function review() {
       S.data.restart + ").";
     $("s-after").append(info("save", "saving"));
     banner("s-result", null);
-    $("s-save").disabled = false;
+    // v0.9.0 typed tier: a save that ARMS the tool (armed -> true) waits
+    // for "yes" typed; everything else is the one-button confirm
+    const arming = !S.data.dry_run && j.diff.some((r) => r.path === "armed" &&
+                                                     r.new === true);
+    $("s-typed").hidden = !arming;
+    $("s-yes").value = "";
+    $("s-save").disabled = arming;
     $("s-save").textContent = S.data.dry_run ? "Check only" :
       "Apply to " + S.data.path.split(/[\\/]/).pop();
     $("s-confirm").showModal();
-    $("s-save").focus();
+    (arming ? $("s-yes") : $("s-save")).focus();
   } catch (e) {
     sMsg("bad", "Could not check the settings: " + e.message);
   }
 }
 async function saveSettings() {
+  if (!$("s-typed").hidden && !typedYes()) return;    // arming waits for yes
   $("s-save").disabled = true;
   try {
     const {r, j} = await postJSON("/api/config", {config: S.cfg, base: S.data.base});
@@ -2690,6 +2708,13 @@ $("s-discard").addEventListener("click", () => {
   renderSettings();
 });
 $("s-save").addEventListener("click", saveSettings);
+function typedYes() { return $("s-yes").value.trim().toLowerCase() === "yes"; }
+$("s-yes").addEventListener("input", () => { $("s-save").disabled = !typedYes(); });
+$("s-yes").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  if (typedYes() && !$("s-save").disabled) saveSettings();
+});
 $("s-cancel").addEventListener("click", () => $("s-confirm").close());
 window.addEventListener("beforeunload", (e) => {
   if (S.dirty) { e.preventDefault(); e.returnValue = ""; }

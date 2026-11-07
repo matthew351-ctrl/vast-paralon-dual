@@ -49,6 +49,10 @@ change to the config format, the HTTP API or what the service does.
   come as toasts at the bottom right: a saved change goes by itself after
   8 s, a warning (dry run) or a failure stays until dismissed. The same
   `POST /api/mode` and `/api/config` as before.
+- **Typed confirm for arming**: a settings save that turns `armed` on waits
+  for "yes" typed in the diff dialog before its Apply button enables (Enter
+  in the field applies once it reads yes). Disarming and every other change
+  keep the one-button confirm; a dry run never asks.
 
 ## 0.8.0
 

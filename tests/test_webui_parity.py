@@ -223,5 +223,26 @@ class ConfirmFlow(unittest.TestCase):
         self.assertRegex(PAGE, r'e\.key !== "Enter"[^\n]*HTMLInputElement')
 
 
+class TypedTier(unittest.TestCase):
+    def test_arming_waits_for_yes(self):
+        rv = js_function("review")
+        self.assertIn('r.path === "armed"', rv)
+        self.assertIn("r.new === true", rv)
+        self.assertIn("!S.data.dry_run", rv)          # a dry run saves nothing
+        self.assertIn('$("s-typed").hidden = !arming;', rv)
+        self.assertIn('$("s-save").disabled = arming;', rv)
+        self.assertIn('$("s-yes").value = "";', rv)   # never pre-filled
+        self.assertIn('return $("s-yes").value.trim().toLowerCase() === "yes";',
+                      js_function("typedYes"))
+        self.assertIn('$("s-save").disabled = !typedYes();', PAGE)
+        self.assertIn('if (!$("s-typed").hidden && !typedYes()) return;',
+                      js_function("saveSettings"))
+        self.assertIn('<input id="s-yes" type="text" autocomplete="off"', PAGE)
+
+    def test_disarming_and_other_changes_stay_one_click(self):
+        # only armed -> true is typed; the rest keep the one Apply button
+        self.assertEqual(js_function("review").count("s-typed"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
