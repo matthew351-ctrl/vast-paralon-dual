@@ -192,5 +192,36 @@ class CoreVsAdvanced(unittest.TestCase):
         self.assertIn("d.open = true", js_function("showErrors"))
 
 
+class ConfirmFlow(unittest.TestCase):
+    def test_toasts_ok_goes_warn_and_err_stay(self):
+        src = js_function("toast")
+        self.assertIn('if (o.ms || kind === "ok") setTimeout(() => t.remove(), '
+                      'o.ms || 8000);', src)
+        self.assertIn("while (tray.children.length > 5)", src)
+        self.assertIn('x.setAttribute("aria-label", "Dismiss")', src)
+        self.assertIn('<div id="toasts" role="status" aria-live="polite"></div>', PAGE)
+        self.assertNotIn('id="notice"', PAGE)
+        self.assertNotIn('banner("notice"', PAGE)
+
+    def test_mode_switch_one_apply_button_with_the_focus(self):
+        ask = js_function("ask")
+        self.assertIn('$("c-ok").textContent = "Apply to " + m.name;', ask)
+        self.assertLess(ask.index('$("confirm").showModal();'),
+                        ask.index('$("c-ok").focus();'))
+        self.assertIn('toast(j.saved ? "ok" : "warn", j.message);',
+                      js_function("confirmSwitch"))
+        # the server side is unchanged: the same POST /api/mode
+        self.assertIn('fetch("/api/mode"', js_function("confirmSwitch"))
+
+    def test_settings_diff_then_one_apply_enter_reviews(self):
+        rv = js_function("review")
+        self.assertIn('"Apply to " + S.data.path.split(', rv)
+        self.assertIn('"Check only"', rv)                  # dry run
+        self.assertLess(rv.index('$("s-confirm").showModal();'),
+                        rv.index('$("s-save").focus();'))
+        self.assertIn('$("s-form").addEventListener("keydown"', PAGE)
+        self.assertRegex(PAGE, r'e\.key !== "Enter"[^\n]*HTMLInputElement')
+
+
 if __name__ == "__main__":
     unittest.main()

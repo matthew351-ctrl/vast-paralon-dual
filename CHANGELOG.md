@@ -41,6 +41,14 @@ change to the config format, the HTTP API or what the service does.
   price_gpu and price_min_bid); the rest sit under a closed "Advanced (n)"
   that this browser remembers per card. A setting with a problem opens its
   section. Every setting is still there and saved the same way.
+- **Confirm flow**: a change is previewed, then applied with ONE primary
+  button that names its target and has the focus, so Enter applies and Esc
+  closes. The mode switch dialog's button reads "Apply to <machine>"; the
+  settings diff's reads "Apply to config.json" ("Check only" in a dry run),
+  and Enter in a settings field opens the diff (Review changes). Results
+  come as toasts at the bottom right: a saved change goes by itself after
+  8 s, a warning (dry run) or a failure stays until dismissed. The same
+  `POST /api/mode` and `/api/config` as before.
 
 ## 0.8.0
 

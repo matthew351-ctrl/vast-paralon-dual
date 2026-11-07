@@ -1059,6 +1059,18 @@ td.next-cell { min-width: 220px; overflow-wrap: anywhere; }
 .mx .k { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
   color: var(--muted); }
 .mx .v { font-size: .9rem; overflow-wrap: anywhere; }
+/* v0.9.0: one toast tray -- an applied change goes by itself after 8 s,
+   a warning or a failure stays until dismissed; at most 5 */
+#toasts { position: fixed; right: 16px; bottom: 16px; z-index: 900;
+  display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+.toast { display: flex; gap: 8px; align-items: flex-start;
+  padding: 10px 12px; border-radius: 10px; background: var(--card);
+  border: 1px solid var(--line); border-left: 4px solid var(--ok-line);
+  box-shadow: var(--pop-shadow); font-size: .9rem; }
+.toast.warn { border-left-color: var(--warn-line); color: var(--fg); }
+.toast.err { border-left-color: var(--bad-line); color: var(--fg); }
+.toast .tm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast button { min-height: 28px; padding: 2px 9px; }
 dialog { border: 1px solid var(--line); border-radius: 12px;
   background: var(--card); color: var(--fg); padding: 18px;
   box-shadow: var(--pop-shadow);
@@ -1151,7 +1163,6 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
   </header>
   <noscript><p class="banner warn">This page needs JavaScript. `status` in a
     shell shows the same.</p></noscript>
-  <p id="notice" class="banner okmsg" role="status" hidden></p>
   <p id="fetch-error" class="banner bad" role="alert" hidden></p>
   <p id="dry-run" class="banner warn" hidden></p>
   <p id="not-armed" class="banner warn" role="status" hidden></p>
@@ -1190,6 +1201,7 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
     <button id="s-save" type="button" class="primary">Save</button>
   </div>
 </dialog>
+<div id="toasts" role="status" aria-live="polite"></div>
 <div id="tip" role="tooltip" hidden></div>
 <dialog id="confirm" aria-labelledby="c-title">
   <h2 id="c-title"></h2>
@@ -1198,7 +1210,7 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
   <p id="c-result" class="bad banner" role="alert" hidden></p>
   <div class="actions">
     <button id="c-cancel" type="button">Cancel</button>
-    <button id="c-ok" type="button" class="primary">Switch</button>
+    <button id="c-ok" type="button" class="primary">Apply</button>
   </div>
 </dialog>
 <script nonce="__NONCE__">
@@ -1567,6 +1579,23 @@ function when(t) {
     ago(Date.now() - d.getTime()) + ")");
   s.title = t;
   return s;
+}
+// v0.9.0: toast(kind ok | warn | err, text, {ms}) -- ok goes by itself
+// after 8 s (or opt.ms), warn and err stay until dismissed (x)
+function toast(kind, msg, opt) {
+  const o = opt || {}, tray = $("toasts");
+  const t = el("div", "toast " + kind);
+  if (kind === "err") t.setAttribute("role", "alert");
+  t.append(el("div", "tm", msg));
+  const x = el("button", null, "\u00d7");
+  x.type = "button";
+  x.setAttribute("aria-label", "Dismiss");
+  x.addEventListener("click", () => t.remove());
+  t.append(x);
+  tray.append(t);
+  while (tray.children.length > 5) tray.firstChild.remove();
+  if (o.ms || kind === "ok") setTimeout(() => t.remove(), o.ms || 8000);
+  return t;
 }
 function busy() {
   return $("confirm").open || $("s-confirm").open || tipFor !== null;
@@ -2056,8 +2085,12 @@ function ask(m, mode, s) {
     "pass, within about " + s.apply_within_s + " s. If the service is not " +
     "running, nothing changes until it starts.";
   banner("c-result", null);
+  // v0.9.0 confirm flow: this dialog is the preview; ONE primary button
+  // names the target and has the focus, so Enter applies and Esc closes
+  $("c-ok").textContent = "Apply to " + m.name;
   $("c-ok").disabled = false;
   $("confirm").showModal();
+  $("c-ok").focus();
   tick();
 }
 async function confirmSwitch() {
@@ -2070,9 +2103,7 @@ async function confirmSwitch() {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.error || "HTTP " + r.status);
     $("confirm").close();
-    const at = new Date().toLocaleTimeString([], {hour: "2-digit",
-                                                   minute: "2-digit"});
-    banner("notice", at + " — " + j.message);
+    toast(j.saved ? "ok" : "warn", j.message);
     load();
   } catch (e) {
     banner("c-result", "Not switched: " + e.message);
@@ -2613,8 +2644,10 @@ async function review() {
     $("s-after").append(info("save", "saving"));
     banner("s-result", null);
     $("s-save").disabled = false;
-    $("s-save").textContent = S.data.dry_run ? "Check only" : "Save";
+    $("s-save").textContent = S.data.dry_run ? "Check only" :
+      "Apply to " + S.data.path.split(/[\\/]/).pop();
     $("s-confirm").showModal();
+    $("s-save").focus();
   } catch (e) {
     sMsg("bad", "Could not check the settings: " + e.message);
   }
@@ -2642,6 +2675,12 @@ async function saveSettings() {
   }
 }
 $("s-review").addEventListener("click", review);
+// v0.9.0: Enter in a settings field = Review changes (the preview)
+$("s-form").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+  e.preventDefault();
+  review();
+});
 $("s-discard").addEventListener("click", () => {
   if (!S.data) return;
   S.cfg = clone(S.data.config);
