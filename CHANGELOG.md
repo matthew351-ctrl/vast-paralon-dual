@@ -21,6 +21,15 @@ change to the config format, the HTTP API or what the service does.
   (rolling N d, or fixed end), from the listing Vast already reports.
   Red under 7 days left on a fixed end, or under 1 day on a rolling one;
   an unlisted machine reads "unlisted".
+- **Short coloured states with the whole sentence as a tip**, on the cards
+  and in the table. Vast: rented (N), listed, unlisted, unreadable.
+  Paralon: rented, available, off: on Vast (paused while a Vast renter has
+  the GPU), offline (warn), paused, not found. Tap, hover or focus the word
+  for what it means and whether this tool owes the relist / un-pause. A
+  rental says only that it is rented, never who rents. The table is one
+  column list: Machine, Mode, Status, Vast, Vast price ("$0.40 · bid
+  $0.29"), Offer ends, Paralon (an on-demand node flagged in warn),
+  Paralon price, Next pass. Prices show at least two decimals.
 
 ## 0.8.0
 

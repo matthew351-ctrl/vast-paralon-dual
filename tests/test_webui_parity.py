@@ -73,5 +73,53 @@ class OfferEnds(unittest.TestCase):
         self.assertIn("offer_ends:", PAGE)       # its (i) text
 
 
+class ShortStates(unittest.TestCase):
+    def test_vast_short_forms_and_colours(self):
+        src = js_function("vastState")
+        for word, cls in (("not read", "st-mut"), ("unreadable", "st-bad"),
+                          ("listed", "st-ok"), ("unlisted", "st-mut")):
+            self.assertIn('["%s", "%s", ' % (word, cls), src)
+        self.assertIn('["rented (" + r + ")", "st-vast", ', src)
+
+    def test_paralon_short_forms_and_colours(self):
+        src = js_function("paralonState")
+        for word, cls in (("not read", "st-mut"), ("not found", "st-bad"),
+                          ("rented", "st-para"), ("available", "st-ok"),
+                          ("off: on Vast", "st-mut"), ("offline", "st-warn"),
+                          ("paused", "st-mut")):
+            self.assertIn('["%s", "%s", ' % (word, cls), src)
+        # the order: a rental first, then open, then why it is closed
+        order = [src.index('"%s"' % w) for w in
+                 ("rented", "available", "off: on Vast", "offline", "paused")]
+        self.assertEqual(order, sorted(order))
+
+    def test_a_rental_never_names_the_renter(self):
+        src = js_function("paralonState") + js_function("vastState")
+        for field in ("paralon_rentals", "vast_running", "rental"):
+            self.assertNotIn("." + field, src)
+
+    def test_the_sentence_is_the_words_tip(self):
+        self.assertIn("b.dataset.text = sentence", js_function("tipWord"))
+        self.assertIn("b.dataset.text ? b.dataset.text :", js_function("showTip"))
+        self.assertIn('closest("button.info, button.tipword")', js_function("infoOf"))
+        # a tip word is a button: keyboard focus and tap open it too
+        self.assertIn('el("button", "tipword"', js_function("tipWord"))
+
+    def test_cards_and_table_use_them(self):
+        self.assertIn('stateEl(vastState(m))', js_function("card"))
+        self.assertIn('stateEl(paralonState(m))', js_function("card"))
+        cols = js_function("tableCols")
+        labels = re.findall(r'label: "([^"]+)"', cols)
+        self.assertEqual(labels, ["Machine", "Mode", "Status", "Vast",
+                                  "Vast price", "Offer ends", "Paralon",
+                                  "Paralon price", "Next pass"])
+        self.assertIn("onDemandEl(m)", cols)
+        self.assertNotIn("vastShort", PAGE)
+        self.assertNotIn("paralonShort", PAGE)
+
+    def test_money_has_two_decimals_at_least(self):
+        self.assertIn('v.toFixed(3).replace(/0$/, "")', js_function("money"))
+
+
 if __name__ == "__main__":
     unittest.main()

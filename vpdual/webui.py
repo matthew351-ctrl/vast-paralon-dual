@@ -958,6 +958,14 @@ button.info { position: relative; display: inline-flex; align-items: center;
   font: italic 700 10px/1 Georgia, "Times New Roman", serif;
   text-transform: none; letter-spacing: 0; cursor: help; }
 button.info::after { content: ""; position: absolute; inset: -9px; }
+/* v0.9.0: a state word that carries its own sentence as a tip */
+button.tipword { appearance: none; border: 0; background: none; padding: 0;
+  margin: 0; min-height: 0; font: inherit; color: inherit; cursor: help;
+  text-align: left; text-decoration: underline dotted;
+  text-underline-offset: 3px; text-decoration-color: var(--line-strong); }
+button.tipword.st-ok { color: var(--ok); } button.tipword.st-mut { color: var(--muted); }
+button.tipword.st-warn { color: var(--warn-fg); } button.tipword.st-bad { color: var(--bad-fg); }
+button.tipword.st-vast { color: var(--vast); } button.tipword.st-para { color: var(--para); }
 button.info:hover, button.info:focus-visible,
 button.info[aria-expanded="true"] { color: var(--accent);
   border-color: var(--accent); }
@@ -1207,6 +1215,8 @@ const HELP = {
     "(Vast's resident count minus running). While any are stored, " +
     "Paralon stays paused, because a resume would share the GPU.",
   vast_price: "Your Vast on-demand GPU price per hour, as Vast reports it now.",
+  vast_ask: "Your Vast on-demand GPU price per hour, then the lowest " +
+    "interruptible bid Vast accepts (bid), as Vast reports them now.",
   min_bid: "The lowest interruptible bid Vast accepts on this machine, " +
     "per hour.",
   paralon_state: "rented: a Paralon renter has the node. available: open " +
@@ -1428,7 +1438,7 @@ function placeTip(b) {
 function showTip(b, pin) {
   if (tipFor && tipFor !== b) hideTip();
   const key = b.dataset.help;
-  tip.textContent = (HELP[key] || "") +
+  tip.textContent = b.dataset.text ? b.dataset.text : (HELP[key] || "") +
                     (HELP_EXTRA[key] ? " " + HELP_EXTRA[key] : "");
   tip.hidden = false;
   tipFor = b;
@@ -1447,7 +1457,8 @@ function hideTip() {
   tipPinned = false;
 }
 function infoOf(e) {
-  return e.target instanceof Element ? e.target.closest("button.info") : null;
+  return e.target instanceof Element ?
+    e.target.closest("button.info, button.tipword") : null;
 }
 function intoTip(node) { return node instanceof Node && tip.contains(node); }
 document.addEventListener("mouseover", (e) => {
@@ -1576,7 +1587,10 @@ function segs(parts) {
   for (const [t, c] of parts) s.append(el("span", c || null, t));
   return s;
 }
-function money(v) { return typeof v === "number" && isFinite(v) ? "$" + v : NOTHING; }
+function money(v) {
+  if (typeof v !== "number" || !isFinite(v)) return NOTHING;
+  return "$" + v.toFixed(3).replace(/0$/, "");
+}
 
 // -- what each side is doing ------------------------------------------
 function vastRenters(m) {
@@ -1608,18 +1622,63 @@ function chipEl(m) {
   s.append(el("span", "chip " + cls, text), info("status", "this status"));
   return s;
 }
-function vastShort(m) {
+// v0.9.0: each side's state as [short word, colour, the whole sentence]:
+// the word in the cell, coloured ok / muted / warn / the side's own, the
+// sentence as its tip. A rental shows that it is rented, never who rents.
+function vastState(m) {
   const v = m.vast;
-  if (v === null) return "not read";
-  if (v.error !== null) return "unreadable";
-  const r = vastRenters(m);
-  return r ? "rented (" + r + ")" : v.listed ? "listed" : "unlisted";
+  if (v === null) return ["not read", "st-mut", "Vast was not read: see the " +
+    "banner above for why. The service holds (changes nothing) meanwhile."];
+  if (v.error !== null) return ["unreadable", "st-bad", "Vast could not be " +
+    "read for this machine: " + v.error];
+  const r = vastRenters(m), stored = Math.max(0, v.resident - v.running);
+  const more = (stored ? "; " + stored + " stored (can resume at any moment)" : "") +
+    (v.listed ? "; listed for new bookings" : "; unlisted: no new bookings");
+  if (r) return ["rented (" + r + ")", "st-vast", r + " Vast renter" +
+    (r === 1 ? "" : "s") + " running on this machine" + more + "."];
+  if (v.listed) return ["listed", "st-ok", "Open to new Vast bookings; no " +
+    "renter running" + (stored ? "; " + stored + " stored" : "") + "."];
+  return ["unlisted", "st-mut", "No new Vast bookings" + (m.took_off.vast ?
+    ": this tool unlisted it and owes the relist." : ".") +
+    (stored ? " " + stored + " stored." : "")];
 }
-function paralonShort(m) {
+function paralonState(m) {
   const p = m.paralon;
-  if (p === null) return "not read";
-  if (p.error !== null) return "not found";
-  return paralonRented(m) ? "rented" : p.available ? "available" : "paused";
+  if (p === null) return ["not read", "st-mut", "Paralon was not read: see " +
+    "the banner above for why."];
+  if (p.error !== null) return ["not found", "st-bad", p.error];
+  if (paralonRented(m)) return ["rented", "st-para", "A Paralon renter has " +
+    "the node."];
+  if (p.available) return ["available", "st-ok", "Open to new Paralon rentals."];
+  if (vastRenters(m) > 0) return ["off: on Vast", "st-mut", "Not open to " +
+    "Paralon rentals while a Vast renter has the GPU" + (m.took_off.paralon ?
+    "; this tool paused it and owes the un-pause." : ".") +
+    " Paralon reports: " + p.state + "."];
+  if (p.state === "offline") return ["offline", "st-warn", "Paralon reports " +
+    "the node offline: its agent is not connected" +
+    (m.agent && m.agent.state ? " (agent " + m.agent.state + ")" : "") + "."];
+  return ["paused", "st-mut", "Not open to new Paralon rentals; the node " +
+    "stays registered" + (m.took_off.paralon ?
+    ". This tool paused it and owes the un-pause." : ".") +
+    " Paralon reports: " + p.state + "."];
+}
+function tipWord(text, cls, sentence) {
+  const b = el("button", "tipword" + (cls ? " " + cls : ""), text);
+  b.type = "button";
+  b.dataset.text = sentence;
+  b.setAttribute("aria-expanded", "false");
+  return b;
+}
+function stateEl(st) { return tipWord(st[0], st[1], st[2]); }
+function onDemandEl(m) {   // a node that cannot be reclaimed, in warn
+  const s = el("span");
+  s.append(" · ", tipWord("on-demand", "st-warn", HELP.paralon_type));
+  return s;
+}
+function askText(m) {
+  const v = m.vast;
+  if (!v || v.error !== null) return NOTHING;
+  return money(v.listing.price_gpu) + " · bid " + money(v.listing.price_min_bid);
 }
 function owedText(m) {
   const t = m.took_off, out = [];
@@ -1681,7 +1740,7 @@ function card(m, s) {
   else if (m.vast.error !== null) vs.append(el("div", "line", "unreadable"));
   else {
     const stored = Math.max(0, m.vast.resident - m.vast.running);
-    const rows = [["State", vastShort(m), "vast_state"],
+    const rows = [["State", stateEl(vastState(m)), "vast_state"],
                   ["GPU", money(m.vast.listing.price_gpu), "vast_price"],
                   ["Min bid", money(m.vast.listing.price_min_bid), "min_bid"],
                   ["Offer ends", segs(offerEnds(m)), "offer_ends"]];
@@ -1691,7 +1750,7 @@ function card(m, s) {
   ps.append(heading("Paralon"));
   if (m.paralon === null) ps.append(el("div", "line muted", "not read"));
   else if (m.paralon.error !== null) ps.append(el("div", "line", "not found"));
-  else ps.append(dl([["State", paralonShort(m), "paralon_state"],
+  else ps.append(dl([["State", stateEl(paralonState(m)), "paralon_state"],
                      ["Type", m.paralon.spot ? "spot" : "ON-DEMAND", "paralon_type"],
                      ["Price", cell(m.paralon.price), "paralon_price"]]));
   sides.append(vs, ps);
@@ -1778,14 +1837,55 @@ function details(m) {
 }
 
 // -- the table --------------------------------------------------------
+// v0.9.0: one column list. Each side's State is its own column (a short
+// coloured word, the sentence as its tip), each price its own column.
+function nextEl(m, s) {
+  const next = nextFor(m, s), nt = nextText(m, next);
+  const w = el("div", null, cell(nt !== null ? nt : next.join("; ")));
+  const owed = owedText(m);
+  if (owed) w.append(el("div", "small muted", "owes: " + owed));
+  return w;
+}
+function tableCols(s) {
+  return [
+    {label: "Machine", cls: "name", cell: (m) => {
+      const w = el("span", null, m.name);
+      w.title = "Vast " + m.vast_machine_id + ", Paralon " + m.paralon_node_id;
+      w.append(el("small", null, "Vast " + m.vast_machine_id));
+      return w;
+    }},
+    {label: "Mode", help: "mode", act: true, cell: (m) => modeButtons(m, s)},
+    {label: "Status", help: "status", chip: true,
+     cell: (m) => el("span", "chip " + chip(m)[1], chip(m)[0])},
+    {label: "Vast", help: "vast_state", primary: true,
+     cell: (m) => stateEl(vastState(m))},
+    {label: "Vast price", help: "vast_ask", primary: true, cls: "nowrap",
+     cell: (m) => el("span", null, askText(m))},
+    {label: "Offer ends", help: "offer_ends", cls: "nowrap", cell: (m) => {
+      const e = offerEnds(m);
+      return e ? segs(e) : el("span", "st-mut", NOTHING);
+    }},
+    {label: "Paralon", help: "paralon_state", primary: true, cell: (m) => {
+      const w = el("span", "nowrap");
+      w.append(stateEl(paralonState(m)));
+      if (m.paralon && m.paralon.error === null && !m.paralon.spot)
+        w.append(onDemandEl(m));
+      return w;
+    }},
+    {label: "Paralon price", help: "paralon_price", primary: true, cls: "nowrap",
+     cell: (m) => el("span", null, m.paralon && m.paralon.error === null ?
+                                   cell(m.paralon.price) : NOTHING)},
+    {label: "Next pass", help: "next_pass", cls: "next-cell",
+     cell: (m) => nextEl(m, s)},
+  ];
+}
 function table(s) {
+  const cols = tableCols(s);
   const t = el("table");
   const head = el("tr");
-  for (const [h, key] of [["Machine"], ["Mode", "mode"], ["Status", "status"],
-                          ["Vast", "vast_state"], ["Offer ends", "offer_ends"],
-                          ["Paralon", "paralon_state"], ["Next pass", "next_pass"]]) {
-    const th = el("th", null, h);
-    if (key) th.append(info(key, h));
+  for (const c of cols) {
+    const th = el("th", null, c.label);
+    if (c.help) th.append(info(c.help, c.label));
     head.append(th);
   }
   const thead = el("thead");
@@ -1793,29 +1893,11 @@ function table(s) {
   const tbody = el("tbody");
   for (const m of s.machines) {
     const tr = el("tr");
-    const name = el("td", "name", m.name);
-    name.title = "Vast " + m.vast_machine_id + ", Paralon " + m.paralon_node_id;
-    name.append(el("small", null, "Vast " + m.vast_machine_id));
-    const st = el("td");
-    st.append(el("span", "chip " + chip(m)[1], chip(m)[0]));
-    const md = el("td");
-    md.append(modeButtons(m, s));
-    let vast = vastShort(m);
-    if (m.vast && m.vast.error === null && typeof m.vast.listing.price_gpu === "number")
-      vast += " · " + money(m.vast.listing.price_gpu);
-    let par = paralonShort(m);
-    if (m.paralon && m.paralon.error === null)
-      par += " · " + (m.paralon.spot ? "spot" : "ON-DEMAND") + " · " +
-             cell(m.paralon.price);
-    const next = nextFor(m, s);
-    const nt = nextText(m, next);
-    const nx = el("td", "next-cell", cell(nt !== null ? nt : next.join("; ")));
-    const owed = owedText(m);
-    if (owed) nx.append(el("div", "small muted", "owes: " + owed));
-    const oe = el("td", "nowrap");
-    const ends = offerEnds(m);
-    oe.append(ends ? segs(ends) : NOTHING);
-    tr.append(name, md, st, el("td", null, vast), oe, el("td", null, par), nx);
+    for (const c of cols) {
+      const td = el("td", c.cls || null);
+      td.append(c.cell(m));
+      tr.append(td);
+    }
     tbody.append(tr);
   }
   t.append(thead, tbody);
