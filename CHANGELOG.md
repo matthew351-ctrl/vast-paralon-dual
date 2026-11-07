@@ -54,6 +54,8 @@ change to the config format, the HTTP API or what the service does.
   in the field applies once it reads yes). Disarming and every other change
   keep the one-button confirm; a dry run never asks.
 
+Paralon API: as 0.8.0 (no new call; the page reads the same `/api/status`).
+
 ## 0.8.0
 
 Public-readiness release.

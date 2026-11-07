@@ -69,7 +69,7 @@ class OfferEnds(unittest.TestCase):
     def test_shown_on_the_card_and_in_the_table(self):
         self.assertIn('["Offer ends", segs(offerEnds(m)), "offer_ends"]',
                       js_function("card"))
-        self.assertIn('["Offer ends", "offer_ends"]', js_function("table"))
+        self.assertIn('label: "Offer ends", help: "offer_ends"', js_function("tableCols"))
         self.assertIn("offer_ends:", PAGE)       # its (i) text
 
 
@@ -218,7 +218,7 @@ class ConfirmFlow(unittest.TestCase):
         self.assertIn('"Apply to " + S.data.path.split(', rv)
         self.assertIn('"Check only"', rv)                  # dry run
         self.assertLess(rv.index('$("s-confirm").showModal();'),
-                        rv.index('$("s-save").focus();'))
+                        rv.index('(arming ? $("s-yes") : $("s-save")).focus();'))
         self.assertIn('$("s-form").addEventListener("keydown"', PAGE)
         self.assertRegex(PAGE, r'e\.key !== "Enter"[^\n]*HTMLInputElement')
 
