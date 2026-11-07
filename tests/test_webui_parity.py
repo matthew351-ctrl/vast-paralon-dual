@@ -121,5 +121,33 @@ class ShortStates(unittest.TestCase):
         self.assertIn('v.toFixed(3).replace(/0$/, "")', js_function("money"))
 
 
+class StackedPhoneCards(unittest.TestCase):
+    def test_table_view_stacks_on_a_phone(self):
+        self.assertIn('const PHONE = window.matchMedia("(max-width: 640px)");', PAGE)
+        render = js_function("render")
+        self.assertIn("PHONE.matches ? stacked(s) : table(s)", render)
+        # no sideways-scrolling wrapper around the stacked cards
+        self.assertIn('classList.toggle("table-wrap", !PHONE.matches)', render)
+        self.assertIn('PHONE.addEventListener("change"', PAGE)
+
+    def test_same_columns_primary_in_two_columns_rest_under_more(self):
+        src = js_function("stacked")
+        self.assertIn("tableCols(s)", src)                  # one column list
+        self.assertIn("cols.filter((c) => c.primary)", src)
+        self.assertIn('el("div", "mx")', src)
+        self.assertIn('el("summary", null, "More")', src)
+        self.assertIn("head.append(h, chipEl(m))", src)     # name + status
+        self.assertIn("if (col.act) c.append(col.cell(m))", src)   # mode
+        self.assertRegex(PAGE, r"\.mx \{ display: grid; grid-template-columns: "
+                               r"minmax\(0, 1fr\) minmax\(0, 1fr\);")
+        prim = re.findall(r'label: "([^"]+)"[^\n]*primary: true',
+                          js_function("tableCols"))
+        self.assertEqual(prim, ["Vast", "Vast price", "Paralon", "Paralon price"])
+
+    def test_more_stays_open_across_refreshes(self):
+        src = js_function("stacked")
+        self.assertIn("d.open = moreOpen.has(m.vast_machine_id)", src)
+
+
 if __name__ == "__main__":
     unittest.main()

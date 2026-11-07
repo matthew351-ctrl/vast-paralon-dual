@@ -30,6 +30,11 @@ change to the config format, the HTTP API or what the service does.
   column list: Machine, Mode, Status, Vast, Vast price ("$0.40 · bid
   $0.29"), Offer ends, Paralon (an on-demand node flagged in warn),
   Paralon price, Next pass. Prices show at least two decimals.
+- **The Table view on a phone** (640 px wide or less) is one card per
+  machine instead of a table that scrolls sideways: the name, its status
+  and the mode switch on top; Vast, Vast price, Paralon and Paralon price
+  in two columns, label over value; Offer ends and Next pass under "More"
+  (kept open across refreshes). Same columns and cells as the table.
 
 ## 0.8.0
 

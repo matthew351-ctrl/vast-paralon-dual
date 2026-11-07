@@ -1048,6 +1048,16 @@ td.name small { display: block; font-weight: 400; color: var(--muted); }
 td .modes { min-width: 210px; }
 td .modes button { min-height: 30px; padding: 2px 6px; font-size: .85rem; }
 td.next-cell { min-width: 220px; overflow-wrap: anywhere; }
+/* v0.9.0: the Table view on a phone -- one card per machine (name,
+   status and mode on top; the primary columns in two columns, label over
+   value; the rest under More), never a table that scrolls sideways */
+.stk { display: grid; gap: 12px; }
+.mx { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px 12px; }
+.mx .m { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mx .k { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); }
+.mx .v { font-size: .9rem; overflow-wrap: anywhere; }
 dialog { border: 1px solid var(--line); border-radius: 12px;
   background: var(--card); color: var(--fg); padding: 18px;
   box-shadow: var(--pop-shadow);
@@ -1848,7 +1858,7 @@ function nextEl(m, s) {
 }
 function tableCols(s) {
   return [
-    {label: "Machine", cls: "name", cell: (m) => {
+    {label: "Machine", cls: "name", rig: true, cell: (m) => {
       const w = el("span", null, m.name);
       w.title = "Vast " + m.vast_machine_id + ", Paralon " + m.paralon_node_id;
       w.append(el("small", null, "Vast " + m.vast_machine_id));
@@ -1904,6 +1914,51 @@ function table(s) {
   return t;
 }
 
+// v0.9.0: stacked on a phone (the same columns, the same cells)
+const PHONE = window.matchMedia("(max-width: 640px)");
+const moreOpen = new Set();   // machines whose More the user opened
+function stacked(s) {
+  const cols = tableCols(s), w = el("div", "stk");
+  const prim = cols.filter((c) => c.primary);
+  const rest = cols.filter((c) => !c.primary && !c.act && !c.chip && !c.rig);
+  for (const m of s.machines) {
+    const c = el("article", "card scard");
+    c.setAttribute("aria-label", m.name);
+    const head = el("div", "head");
+    const h = el("h2", null, m.name);
+    h.title = m.name;
+    head.append(h, chipEl(m));
+    const ids = el("div", "ids", "Vast " + m.vast_machine_id + " · Paralon " +
+                   m.paralon_node_id);
+    ids.title = ids.textContent;
+    c.append(head, ids);
+    for (const col of cols) if (col.act) c.append(col.cell(m));
+    const mx = el("div", "mx");
+    for (const col of prim) {
+      const f = el("div", "m"), k = el("span", "k"), v = el("span", "v");
+      k.append(labelled(col.label, col.help));
+      v.append(col.cell(m));
+      f.append(k, v);
+      mx.append(f);
+    }
+    c.append(mx);
+    const d = el("details");
+    d.open = moreOpen.has(m.vast_machine_id);
+    d.addEventListener("toggle", () => {
+      if (d.open) moreOpen.add(m.vast_machine_id);
+      else moreOpen.delete(m.vast_machine_id);
+    });
+    d.append(el("summary", null, "More"));
+    const body = el("div");
+    body.append(dl(rest.map((col) => [col.label, col.cell(m), col.help])));
+    d.append(body);
+    c.append(d);
+    w.append(c);
+  }
+  return w;
+}
+PHONE.addEventListener("change", () => { if (last && view === "table") render(last); });
+
 function setView(v) {
   view = v;
   try { localStorage.setItem("vpdual.view", v); } catch (e) { /* ignore */ }
@@ -1939,7 +1994,10 @@ function render(s) {
     return;
   }
   if (view === "cards") $("machines").replaceChildren(...s.machines.map((m) => card(m, s)));
-  else $("table").replaceChildren(table(s));
+  else {
+    $("table").classList.toggle("table-wrap", !PHONE.matches);
+    $("table").replaceChildren(PHONE.matches ? stacked(s) : table(s));
+  }
 }
 
 function tick() {
