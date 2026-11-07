@@ -149,5 +149,48 @@ class StackedPhoneCards(unittest.TestCase):
         self.assertIn("d.open = moreOpen.has(m.vast_machine_id)", src)
 
 
+class CoreVsAdvanced(unittest.TestCase):
+    def core(self, name):
+        m = re.search(r"const %s = new Set\(\[(.*?)\]\);" % name, PAGE, re.S)
+        return set(re.findall(r'"([a-z_]+)"', m.group(1)))
+
+    def test_core_keys_exist_and_the_rest_fold(self):
+        from vpdual.settings import schema
+        sch = schema()
+        keys = {f["key"] for g in sch["groups"] for f in g["fields"]}
+        core = self.core("CORE_SETTINGS")
+        self.assertTrue(core <= keys, core - keys)
+        self.assertEqual(core, {"armed", "on_paralon_rental", "poll_interval_s",
+                                "idle_job_images", "notify_command",
+                                "vastai_bin"})
+        listing = self.core("CORE_LISTING")
+        self.assertEqual(listing, {"price_gpu", "price_min_bid"})
+        self.assertTrue(listing <= {f["key"] for f in sch["listing"]})
+
+    def test_advanced_is_closed_counted_and_remembered(self):
+        src = js_function("advanced")
+        self.assertIn('el("details", "adv")', src)
+        self.assertIn('"Advanced (" + rows.length + ")"', src)
+        self.assertIn('"vpdual.adv." + id', src)
+        self.assertIn('localStorage.getItem(key) === "1"', src)
+        rs = js_function("renderSettings")
+        self.assertIn("if (CORE_SETTINGS.has(f.key)) c.append(row); else adv.push(row);", rs)
+        self.assertIn("if (adv.length) c.append(advanced(g.title, adv));", rs)
+        self.assertIn('listingEditor(cfg, "vast_listing", "", true)', rs)
+        # the per-machine overrides are not split (already folded)
+        self.assertIn('listingEditor(m, p + ".vast_listing", "shared value")', rs)
+
+    def test_split_listing_stays_inside_the_wrapper(self):
+        src = js_function("listingEditor")
+        self.assertIn("if (split && !CORE_LISTING.has(f.key)) adv.push(row);", src)
+        self.assertIn('wrap.append(advanced("vast_listing", adv))', src)
+        self.assertLess(src.index("wrap.append(advanced("),
+                        src.index('wrap.addEventListener("input"'))
+
+    def test_a_problem_opens_its_section(self):
+        self.assertIn('spot.closest("details")', js_function("showErrors"))
+        self.assertIn("d.open = true", js_function("showErrors"))
+
+
 if __name__ == "__main__":
     unittest.main()

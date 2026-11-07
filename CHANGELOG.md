@@ -35,6 +35,12 @@ change to the config format, the HTTP API or what the service does.
   and the mode switch on top; Vast, Vast price, Paralon and Paralon price
   in two columns, label over value; Offer ends and Next pass under "More"
   (kept open across refreshes). Same columns and cells as the table.
+- **Settings: core vs "Advanced (n)"**. Each settings card shows the
+  settings most people change (armed, on_paralon_rental, poll_interval_s,
+  idle_job_images, notify_command, vastai_bin, and the listing fallbacks'
+  price_gpu and price_min_bid); the rest sit under a closed "Advanced (n)"
+  that this browser remembers per card. A setting with a problem opens its
+  section. Every setting is still there and saved the same way.
 
 ## 0.8.0
 

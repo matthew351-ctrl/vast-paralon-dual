@@ -1029,6 +1029,7 @@ dd { margin: 0; overflow-wrap: anywhere; }
 details { margin-top: auto; border-top: 1px solid var(--line);
   padding-top: 4px; font-size: .86rem; }
 summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+.s-card details.adv { margin-top: 8px; }
 details > div { display: grid; gap: 8px; padding: 4px 0 2px; }
 ol.decisions { margin: 0; padding-left: 18px; }
 ol.decisions li { overflow-wrap: anywhere; }
@@ -2298,7 +2299,31 @@ function listEditor(obj, key, path) {
 }
 // vast_listing of `owner` (the config, or a machine): created on the first
 // value typed, dropped again when emptied (if the file did not have it).
-function listingEditor(owner, path, hintEmpty) {
+// v0.9.0: core settings in place, the rest under a closed "Advanced (n)"
+// per section, remembered in this browser; a field with a problem opens
+// its section (showErrors). Which keys are core is the page's choice only:
+// the config, its defaults and the API are as before.
+const CORE_SETTINGS = new Set(["armed", "on_paralon_rental", "poll_interval_s",
+  "idle_job_images", "notify_command", "vastai_bin"]);
+const CORE_LISTING = new Set(["price_gpu", "price_min_bid"]);
+function advanced(id, rows) {
+  const d = el("details", "adv");
+  const key = "vpdual.adv." + id;
+  try { d.open = localStorage.getItem(key) === "1"; } catch (e) { /* closed */ }
+  d.addEventListener("toggle", () => {
+    try {
+      if (d.open) localStorage.setItem(key, "1"); else localStorage.removeItem(key);
+    } catch (e) { /* not remembered */ }
+  });
+  d.append(el("summary", null, "Advanced (" + rows.length + ")"));
+  const body = el("div");
+  body.append(...rows);
+  d.append(body);
+  return d;
+}
+// `split`: the core listing keys in place, the rest under Advanced (inside
+// the same wrapper, so its input listener still sees every field)
+function listingEditor(owner, path, hintEmpty, split) {
   const had = owner.vast_listing !== undefined;
   const lst = owner.vast_listing && typeof owner.vast_listing === "object" &&
               !Array.isArray(owner.vast_listing) ? owner.vast_listing : {};
@@ -2307,11 +2332,14 @@ function listingEditor(owner, path, hintEmpty) {
   err.dataset.err = path;
   err.hidden = true;
   wrap.append(err);
+  const adv = [];
   for (const f of S.data.schema.listing) {
-    wrap.append(fieldRow(f.key, "cfg.l." + f.key,
+    const row = fieldRow(f.key, "cfg.l." + f.key,
       valueInput(lst, f.key, f.type, {placeholder: hintEmpty}), f.unit, "",
-      path + "." + f.key));
+      path + "." + f.key);
+    if (split && !CORE_LISTING.has(f.key)) adv.push(row); else wrap.append(row);
   }
+  if (adv.length) wrap.append(advanced("vast_listing", adv));
   wrap.addEventListener("input", () => {
     if (Object.keys(lst).length) owner.vast_listing = lst;
     else if (!had) delete owner.vast_listing;
@@ -2334,17 +2362,18 @@ function renderSettings() {
   const form = el("div");
   const grid = el("div", "s-grid");
   for (const g of d.schema.groups) {
-    const c = card2(g.title);
+    const c = card2(g.title), adv = [];
     for (const f of g.fields) {
-      if (f.type === "list") { c.append(listEditor(cfg, f.key, f.key)); continue; }
-      c.append(fieldRow(f.key, "cfg." + f.key,
-        valueInput(cfg, f.key, f.type, {defaultValue: f.default, options: f.options}),
-        f.unit, "", f.key));
+      const row = f.type === "list" ? listEditor(cfg, f.key, f.key) :
+        fieldRow(f.key, "cfg." + f.key,
+          valueInput(cfg, f.key, f.type, {defaultValue: f.default, options: f.options}),
+          f.unit, "", f.key);
+      if (CORE_SETTINGS.has(f.key)) c.append(row); else adv.push(row);
     }
     if (g.title === "Vast") {
       const h = el("h3", null, "Listing fallbacks (vast_listing)");
       h.append(info("cfg.vast_listing", "listing fallbacks"));
-      c.append(h, listingEditor(cfg, "vast_listing", ""));
+      c.append(h, listingEditor(cfg, "vast_listing", "", true));
     }
     if (g.title === "Paralon") {
       const k = d.key;
@@ -2353,6 +2382,7 @@ function renderSettings() {
           "NOT SET"), "", "Not editable here: run init again or edit " +
           k.env_file + ", then restart the service.", "PARALON_API_KEY"));
     }
+    if (adv.length) c.append(advanced(g.title, adv));
     grid.append(c);
   }
   form.append(grid);
@@ -2536,6 +2566,8 @@ function showErrors(errors) {
       spot.hidden = false;
       const row = spot.closest(".field");
       if (row) row.classList.add("has-err");
+      for (let d = spot.closest("details"); d; d = d.parentElement.closest("details"))
+        d.open = true;                  // v0.9.0: a problem is never folded away
       first = first || spot;
     } else {
       $("s-general-errors").append(el("p", "banner bad", e.message));
