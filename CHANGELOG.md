@@ -14,6 +14,9 @@ against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
   says yes to root on a read-only mount or a full disk. A failure is a FAIL
   with the OS error in its fix line. A missing state directory under a
   regular file is a FAIL too.
+- **README: a Discord webhook example** for `notify_command`. `python3`
+  builds the JSON body, so a message with quotes or line breaks arrives
+  intact (a plain `"$(cat)"` inside the JSON breaks on both).
 
 ## 0.9.0 — 2026-11-08
 

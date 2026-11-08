@@ -524,6 +524,14 @@ if it holds the token, or put the command in a script under `~/bin`):
 "notify_command": "curl -fsS https://api.telegram.org/botYOUR_BOT_TOKEN/sendMessage -d chat_id=YOUR_CHAT_ID --data-urlencode text@-"
 ```
 
+Discord (a channel webhook; the URL is the secret, so keep it out of a
+shared config the same way as the Telegram token). `python3` turns the
+message into JSON, so quotes and line breaks in it arrive intact:
+
+```json
+"notify_command": "python3 -c 'import json,sys; print(json.dumps({\"content\": sys.stdin.read().strip()}))' | curl -fsS -H \"Content-Type: application/json\" -d @- https://discord.com/api/webhooks/YOUR/WEBHOOK"
+```
+
 Mail (any `mail`/`mailx` with a working local MTA):
 
 ```json
