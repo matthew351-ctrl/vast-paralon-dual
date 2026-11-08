@@ -9,7 +9,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to Ubuntu 26.04 (Oct 2026), which has no Python 3.8 build for
+    # actions/setup-python; 3.8 runs on ubuntu-22.04 so the supported floor stays tested.
+    runs-on: ${{ matrix.python == '3.8' && 'ubuntu-22.04' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
