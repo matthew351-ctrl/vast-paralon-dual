@@ -6,7 +6,7 @@ against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
 (`available`) and `POST /nodes/{id}/reclaim`, on
 `https://paraloncloud.com/api/v1`.
 
-## 0.9.0 (unreleased)
+## 0.9.0 — 2026-11-08
 
 Web UI: one way to show values, clearer states, a phone layout for
 the table, core vs advanced settings and a tiered change flow. No

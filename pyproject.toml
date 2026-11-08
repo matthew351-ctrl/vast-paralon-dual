@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vast-paralon-dual"
-version = "0.8.0"
+version = "0.9.0"
 description = "List GPU machines on Vast.ai and Paralon Cloud at once, or switch fully between them."
 readme = "README.md"
 license = {text = "MIT"}
