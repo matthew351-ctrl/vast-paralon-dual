@@ -17,6 +17,10 @@ against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
 - **README: a Discord webhook example** for `notify_command`. `python3`
   builds the JSON body, so a message with quotes or line breaks arrives
   intact (a plain `"$(cat)"` inside the JSON breaks on both).
+- **README: `doctor` and `arm` have their own headings** under Commands:
+  what each does, the exit codes (`doctor` 0 / 1 on a FAIL; `arm` 0, or 2
+  when it refuses on a blocking `doctor` FAIL) and example output; the
+  quick start links to both.
 
 ## 0.9.0 — 2026-11-08
 

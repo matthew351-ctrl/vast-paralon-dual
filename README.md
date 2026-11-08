@@ -72,7 +72,9 @@ where each machine is listed, and switches the agent off while Vast rents.
 ## Quick start
 
 Run these as your normal user on the control plane or the GPU machine (see
-above). Nothing is changed on Vast or Paralon until step 7.
+above). Nothing is changed on Vast or Paralon until step 7. Step 4 is
+[`doctor`](#doctor) and step 7 is [`arm`](#arm) (what each checks, their
+exit codes and example output are under Commands).
 
 ```sh
 # 1. Install (Python 3.8+). pipx gives each tool its own environment, out of
@@ -171,18 +173,77 @@ vast_paralon_dual.py [-c CONFIG] [--dry-run] ui [--host HOST] [--port PORT]
 vast_paralon_dual.py [-c CONFIG] service
 ```
 
-- `doctor`: checks the install, one PASS / WARN / FAIL row each with a fix:
-  Python >= 3.8; `vastai` found, its version (>= 1.3.0; newer than the
-  tested one is a WARN) and its login; the Paralon key (environment, or the
-  `env` file at mode 600) and one `GET /nodes`; the config; every
-  `vast_machine_id` in `show machines` and every `paralon_node_id` in
-  `GET /nodes`; `docker ps` on each `paralon_agent` (over `ssh -o
-  BatchMode=yes` for `user@host`); a relist price per machine (WARN when the
-  config fallback would be used); the state file and its `.lock`; the
-  systemd unit (WARN only). Read-only. Exit 1 on any FAIL.
-- `arm`: sets `"armed": true` in the config (backed up first) after a
-  `doctor` with no FAIL in its first five groups; restart the service to
-  apply it.
+### `doctor`
+
+Checks the install and prints one PASS / WARN / FAIL row per check, each
+FAIL or WARN with its fix. **Exit 0** when nothing FAILs (WARNs allowed),
+**exit 1** on any FAIL. It changes nothing on Vast or Paralon; the only
+thing it writes is a temp file, created in the state directory and removed
+at once, to prove that directory is really writable.
+
+What it checks: Python >= 3.8; `vastai` found, its version (>= 1.3.0; newer
+than the tested one is a WARN) and its login; the Paralon key (environment,
+or the `env` file at mode 600) and one `GET /nodes`; the config; every
+`vast_machine_id` in `show machines` and every `paralon_node_id` in
+`GET /nodes`; `docker ps` on each `paralon_agent` (over `ssh -o
+BatchMode=yes` for `user@host`); a relist price per machine (WARN when the
+config fallback would be used); the state file (a real write probe: a
+read-only mount or a full disk FAILs even as root) and its `.lock`; the
+systemd unit (WARN only).
+
+```
+$ vast-paralon-dual doctor
+python + vastai:
+  PASS  python               Python 3.12.3
+  PASS  vastai found         /home/you/.local/bin/vastai
+  PASS  vastai version       vastai 1.3.0
+  PASS  vastai logged in     `vastai show user` works
+Paralon key:
+  PASS  key present          PARALON_API_KEY from the environment
+  PASS  GET /nodes           1 node(s) readable
+config:
+  PASS  loads and validates  /home/you/.config/vast-paralon-dual/config.json: 1 machine(s)
+machines and nodes:
+  PASS  vast 111             in `show machines`
+  PASS  node node-1          in GET /nodes
+Paralon agents:
+  PASS  me@gpu1              ssh (BatchMode) + docker ps works (1 container(s))
+relist prices:
+  PASS  machine 111          terms are saved at unlist; config fallback present
+state file:
+  PASS  writable             /home/you/.local/state/vast-paralon-dual/state.json
+  PASS  .lock                can be taken
+service:
+  WARN  installed            vast-paralon-dual.service is not installed
+        fix: see `service` (after a day unarmed and arming)
+0 fail, 1 warn, 13 pass
+```
+
+### `arm`
+
+Lets `run` make changes: sets `"armed": true` in the config (the old file
+is kept as a backup). It runs `doctor` first and **refuses (exit 2)** on a
+FAIL in the first five groups (vastai, the Paralon key, the config, the
+ids, Docker on each machine), the same FAILs that stop `run` from starting;
+`--skip-doctor` arms anyway. **Exit 0** when armed, or already armed
+(nothing changed). The service reads the config when it starts, so restart
+it to apply.
+
+```
+$ vast-paralon-dual arm
+...                                  (the doctor table, as above)
+armed (old config kept as config.json.bak-20261108-125223). Restart the service to apply: sudo systemctl restart vast-paralon-dual
+
+$ vast-paralon-dual arm              # with the Paralon key missing
+...
+  FAIL  key present          no PARALON_API_KEY in the environment or /home/you/.config/vast-paralon-dual/env
+        fix: run `init`, or write PARALON_API_KEY=prlc_... to that file (chmod 600)
+...
+not armed: fix the FAIL rows above first (or --skip-doctor)
+```
+
+### The other commands
+
 - `status`: per machine, both sides, owed relists, whether the Paralon agent
   is running, the listing a relist would use, what the next pass would do and
   the last decisions. Writes nothing. `--json`: the same as JSON plus the
