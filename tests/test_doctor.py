@@ -156,7 +156,12 @@ class DoctorTests(TempDirMixin, unittest.TestCase):
         self.assertEqual(self.status(self.rows(), "machine 111"), WARN)  # fallback used
 
     def test_state_not_writable_and_lock_held(self):
-        self.raw["state_file"] = "/proc/nope/state.json"
+        # a directory that can never be created, whoever runs it (root too):
+        # its parent is a regular file
+        blocker = os.path.join(self.tmp, "a-file")
+        with open(blocker, "w") as fh:
+            fh.write("x")
+        self.raw["state_file"] = os.path.join(blocker, "sub", "state.json")
         self.assertEqual(self.status(self.rows(), "writable"), FAIL)
         self.raw["state_file"] = self.state_path
         import fcntl
@@ -164,6 +169,33 @@ class DoctorTests(TempDirMixin, unittest.TestCase):
             fcntl.flock(held, fcntl.LOCK_EX)
             # flock is per open file: a second open in this process blocks too
             self.assertEqual(self.status(self.rows(), ".lock"), WARN)
+
+    def test_writable_is_a_real_write_probe(self):
+        # v0.9.1: a temp file is created in the state directory; an OS
+        # error (read-only mount, full disk) is a FAIL with the error shown,
+        # which os.access() would have passed as root
+        self.assertEqual(self.status(self.rows(), "writable"), PASS)
+        self.assertEqual([f for f in os.listdir(os.path.dirname(self.state_path))
+                          if f.startswith(".vpdual-probe-")], [])   # removed
+        full = OSError(28, "No space left on device")
+        with mock.patch("vpdual.doctor.tempfile.NamedTemporaryFile",
+                        side_effect=full):
+            rows = self.rows()
+        row = [r for r in rows if r.name == "writable"][0]
+        self.assertEqual(row.status, FAIL)
+        self.assertIn("No space left on device", row.hint)
+
+    def test_existing_state_file_must_open_for_append(self):
+        # a state "file" that is a directory cannot be opened for append,
+        # as root too; nothing is written to a real one
+        os.mkdir(self.state_path)
+        self.assertEqual(self.status(self.rows(), "writable"), FAIL)
+        os.rmdir(self.state_path)
+        with open(self.state_path, "w") as fh:
+            fh.write("{}")
+        self.assertEqual(self.status(self.rows(), "writable"), PASS)
+        with open(self.state_path) as fh:
+            self.assertEqual(fh.read(), "{}")
 
     def test_service_not_installed_is_only_a_warning(self):
         self.runner.unit = "not-found"

@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 
@@ -93,6 +94,22 @@ def _raw_config(path):
         return raw if isinstance(raw, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def _write_probe(directory, existing=None):
+    """None if a file can really be created in `directory` (a temp file,
+    removed at once) and `existing`, when given, opened for append (nothing
+    written); else the OS error as text."""
+    try:
+        with tempfile.NamedTemporaryFile(dir=directory, prefix=".vpdual-probe-",
+                                         delete=True):
+            pass
+        if existing is not None:
+            with open(existing, "a"):
+                pass
+    except OSError as exc:
+        return str(exc)
+    return None
 
 
 class Doctor:
@@ -346,20 +363,31 @@ class Doctor:
         g = GROUPS[6]
         path = self.cfg.state_file or os.path.expanduser(DEFAULT_STATE)
         d = os.path.dirname(os.path.abspath(path))
+        # v0.9.1: a real probe, never os.access() -- that says yes to root on
+        # a read-only mount or a full disk. A temp file is created (and
+        # removed) in the state directory, and an existing state file is
+        # opened for append (nothing written).
         if not os.path.isdir(d):
             up = d
-            while up and not os.path.isdir(up):
+            while not os.path.exists(up) and os.path.dirname(up) != up:
                 up = os.path.dirname(up)
-            if os.access(up, os.W_OK):
+            if not os.path.isdir(up):
+                self.add(g, "writable", FAIL, f"cannot create {d}",
+                         f"{up} is not a directory; set state_file to a path "
+                         "under a directory")
+                return
+            err = _write_probe(up)
+            if err is None:
                 self.add(g, "writable", PASS, f"{d} will be created")
             else:
                 self.add(g, "writable", FAIL, f"cannot create {d}",
-                         f"mkdir -p {d} as a user that can, then chown it")
+                         f"{err}; mkdir -p {d} as a user that can, then chown it")
             return
-        if not os.access(d, os.W_OK) or (os.path.exists(path)
-                                         and not os.access(path, os.W_OK)):
+        err = _write_probe(d, path if os.path.exists(path) else None)
+        if err is not None:
             self.add(g, "writable", FAIL, f"{path} or its directory is not "
-                     "writable", f"chown $USER {d} {path}")
+                     "writable", f"{err}; check the mount, the free space, "
+                     f"then chown $USER {d} {path}")
             return
         self.add(g, "writable", PASS, path)
         try:

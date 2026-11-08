@@ -6,6 +6,15 @@ against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
 (`available`) and `POST /nodes/{id}/reclaim`, on
 `https://paraloncloud.com/api/v1`.
 
+## Unreleased
+
+- **`doctor`: the state-file check really writes.** It creates (and
+  removes) a temp file in the state directory and opens an existing state
+  file for append (nothing written), instead of asking `os.access`, which
+  says yes to root on a read-only mount or a full disk. A failure is a FAIL
+  with the OS error in its fix line. A missing state directory under a
+  regular file is a FAIL too.
+
 ## 0.9.0 — 2026-11-08
 
 Web UI: one way to show values, clearer states, a phone layout for
