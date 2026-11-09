@@ -14,7 +14,7 @@ touches the Vast daemon, its packages or its containers. On each GPU machine
 it stops and starts only Paralon's agent, the containers that agent started,
 and your own idle job if you name one (`idle_job_images`).
 
-What changed in each release: [CHANGELOG.md](CHANGELOG.md).
+What changed in each release: [CHANGELOG.md](../CHANGELOG.md).
 
 ## Before you start
 

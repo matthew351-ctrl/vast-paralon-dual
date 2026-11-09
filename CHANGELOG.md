@@ -161,7 +161,7 @@ Paralon API: as 0.6.0.
   page (standard library only, nothing loaded from the internet) with each
   machine's Vast and Paralon side, what the next pass would do and the last
   decisions, as a grid of cards or a table. It is the same data as `status`.
-  See [Web UI](#web-ui).
+  See [Web UI](docs/REFERENCE.md#web-ui).
 - **Machine names.** An optional `name` per machine in the config; without
   one, the hostname Vast reports for your machine is shown, else its id.
   `status` shows them too.
