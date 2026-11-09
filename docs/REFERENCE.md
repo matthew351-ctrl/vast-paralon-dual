@@ -290,6 +290,8 @@ hover, keyboard focus or tap. It refreshes every 15 s. It is the
 same data as `status` (`GET /api/status` serves it as JSON) and, like
 `status`, it writes nothing to Vast or Paralon.
 
+![The machines as cards: four machines in different states, dark theme](ui-cards.png)
+
 Where the data comes from: the running `run` service writes it after every
 pass, from that pass's own reads, to `status.json` next to the state file,
 and the page serves that file while it is younger than three
@@ -324,6 +326,11 @@ itself uses the new config at once. The Paralon API key is never shown or
 sent: the page says only whether it is set and where it is read from; change
 it with `init` or by editing the `env` file next to the config. With
 `--dry-run` the page shows the changes and saves nothing.
+
+![The Settings tab: general, Vast and Paralon settings and the machines, dark theme](ui-settings.png)
+
+Both screenshots are the synthetic machines of `tests/status_scenario.py`
+served with `--dry-run`; the ids are not real ones.
 
 It listens on **127.0.0.1 only** by default (port 8787). Without a login,
 anyone who can open the page can switch modes and edit the config. To
