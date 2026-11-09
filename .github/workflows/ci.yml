@@ -43,3 +43,20 @@ jobs:
         run: |
           python -m pip install ruff
           ruff check .
+      - name: README stays a summary (80 lines max, four H2 sections; the rest is docs/REFERENCE.md)
+        shell: python
+        run: |
+          import sys
+          allowed = ("Before you start", "Quick start", "What it does", "Get help")
+          lines = open("README.md", encoding="utf-8").read().splitlines()
+          bad = []
+          if len(lines) > 80:
+              bad.append(f"README.md is {len(lines)} lines (max 80): move the detail to docs/REFERENCE.md")
+          fence = False
+          for n, line in enumerate(lines, 1):
+              if line.lstrip().startswith("```"):
+                  fence = not fence
+              elif not fence and line.startswith("## ") and not line[3:].strip().startswith(allowed):
+                  bad.append(f"README.md:{n}: H2 {line[3:].strip()!r} is not one of: {', '.join(allowed)}")
+          print("\n".join(bad) or f"README.md: {len(lines)} lines, H2 sections ok")
+          sys.exit(1 if bad else 0)
