@@ -8,6 +8,7 @@ against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
 
 ## Unreleased
 
+- **README split:** README.md is now a one-page summary; the full reference moved to [docs/REFERENCE.md](docs/REFERENCE.md).
 - **`doctor`: the state-file check really writes.** It creates (and
   removes) a temp file in the state directory and opens an existing state
   file for append (nothing written), instead of asking `os.access`, which
