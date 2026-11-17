@@ -302,6 +302,19 @@ sides itself, as `status` does, and says "live read (service not
 running?)". A mode you switch shows on the page at once; the service
 applies it on its next pass.
 
+Each Paralon state also says how old its node reading is ("paused · read
+45 s ago"): the time since the last good `GET /nodes`, which the tool
+already keeps (no extra call). It is dim within the slow read cadence
+(`paralon_min_get_interval_s` plus one `poll_interval_s`, 180 s by
+default), amber past it (a read is late) and red past that plus the
+Paralon client's longest back-off after errors (10 min): the reads are
+failing or not running, and the service holds. "This tool paused it and
+owes the un-pause" shows only while the node reads paused (online, closed,
+not rented); an offline node is off for another reason, such as its agent
+stopped under a Vast renter. A machine in mode `vast` reads "Vast only, not
+on Paralon", in amber ("listed on both") only if Paralon reads its node
+online and available.
+
 Each machine has a vast / paralon / dual switch. After a confirm, the mode is
 **saved** to the state file, as `mode` does, and nothing else: the running
 `run` service applies it on its next pass (within `poll_interval_s`). The

@@ -212,6 +212,14 @@ class ParalonClient:
         self._nodes_cache = (self._clock(), nodes)
         return nodes
 
+    def nodes_age(self):
+        """Seconds since the last GOOD GET /nodes (the cache's own fetch
+        time), or None before the first. No API call: the web page shows
+        it as each node state's age."""
+        if not self._nodes_cache:
+            return None
+        return max(0.0, self._clock() - self._nodes_cache[0])
+
     def cached_node(self, node_id):
         """The node from the last GET /nodes, or None. No API call."""
         for node in (self._nodes_cache or (0, []))[1]:

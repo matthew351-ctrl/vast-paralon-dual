@@ -8,6 +8,26 @@ against: the tool reads `GET /nodes` and writes `PATCH /nodes/{id}`
 
 ## Unreleased
 
+- **Web UI: the Paralon state says only what is true now.**
+  - "This tool paused it and owes the un-pause" (and "Owes: Paralon
+    un-pause") shows only while the node reads paused: online, closed to
+    new rentals, not rented. An offline node is off for another reason
+    (its agent stopped under a Vast renter, say), whatever the took-off
+    flag says; the flag itself, and what the service does with it, are
+    unchanged. "Offline" is now the engine's own test (`online: false` or
+    state `offline`), sent as `paralon.online` in `GET /api/status`.
+  - A machine in mode `vast` reads "Vast only, not on Paralon", neutral,
+    instead of a warning such as "offline"; amber ("Vast only: listed on
+    both") only when Paralon reads its node online and available. The mode
+    switch stays, and the table no longer flags an on-demand node there.
+  - Each Paralon state shows the age of its node reading, e.g. "paused ·
+    read 45 s ago": the time since the client's last good `GET /nodes`
+    (`paralon.read_at`, epoch s; no extra call). Dim within the slow read
+    cadence (`paralon_min_get_interval_s` + `poll_interval_s`, 180 s by
+    default), amber past it, red past that plus the client's longest
+    back-off (10 min), when the reads are failing and the service holds.
+    `GET /api/status` sends both limits (`paralon_read_slow_s`,
+    `paralon_read_stale_s`).
 - **README split:** README.md is now a one-page summary; the full reference moved to [docs/REFERENCE.md](docs/REFERENCE.md).
 - **`doctor`: the state-file check really writes.** It creates (and
   removes) a temp file in the state directory and opens an existing state

@@ -19,8 +19,8 @@ import os
 
 from .agent import AgentError, agent_control
 from .config import clean_name
-from .engine import Controller, describe_listing
-from .paralon import ParalonError
+from .engine import Controller, _offline, describe_listing
+from .paralon import BACKOFF_MAX_S, ParalonError
 from .state import MODES, owes_something, write_json_atomic
 from .vast import VastError
 
@@ -75,11 +75,36 @@ def _vast(vm):
             "listing_text": describe_listing(terms), "error": None}
 
 
-def _paralon(n):
+def _paralon(n, read_at=None):
+    """`online`: the engine's own test (_offline), so the page says "paused"
+    only for a node the engine would call paused. `read_at` (epoch s): when
+    that GET /nodes was made -- the state's age on the page."""
     if n is None:
         return {"error": NOT_FOUND_NODE}
     return {"state": n.state, "available": n.available, "spot": n.spot,
-            "price": n.price_text, "rented": n.rented, "error": None}
+            "price": n.price_text, "rented": n.rented,
+            "online": not _offline(n), "read_at": read_at, "error": None}
+
+
+def nodes_read_at(ctl):
+    """Epoch s of the Paralon client's last GOOD GET /nodes, from the age
+    the client keeps (ParalonClient.nodes_age); None if it has none. No API
+    call."""
+    age = getattr(ctl.paralon, "nodes_age", lambda: None)()
+    return None if age is None else int(ctl.clock() - age)
+
+
+def read_age_limits(cfg):
+    """(slow_s, stale_s) for the age of a node reading on the page.
+    slow_s: GET /nodes is re-read at the first pass at least
+    paralon_min_get_interval_s after the last (sooner while a node is rented
+    or a machine recovers), so a healthy reading is never older than that
+    plus one poll_interval_s; older is late (amber). stale_s: slow_s plus the
+    Paralon client's longest back-off after errors (BACKOFF_MAX_S): a
+    reading that old means the reads since have all failed or not run, so
+    the service is treating Paralon as unreadable and holds (red)."""
+    slow = cfg.paralon_min_get_interval_s + cfg.poll_interval_s
+    return slow, slow + BACKOFF_MAX_S
 
 
 def status_data(ctl, cfg, machine_id=None, *, fresh_ok=True, read=None):
@@ -102,6 +127,7 @@ def status_data(ctl, cfg, machine_id=None, *, fresh_ok=True, read=None):
         except (VastError, ParalonError) as exc:
             data = None
             out["read_error"] = str(exc)
+    read_at = nodes_read_at(ctl) if data is not None else None
     for m in targets:
         st = ctl.mstate(m)
         relist = ctl.relist_listing(m)
@@ -130,7 +156,7 @@ def status_data(ctl, cfg, machine_id=None, *, fresh_ok=True, read=None):
         if data is not None:
             row["vast"] = _vast(vm)
             n = data[1].get(m.paralon_node_id)
-            row["paralon"] = _paralon(n)
+            row["paralon"] = _paralon(n, read_at)
             if n is not None and st["mode"] == "dual" and not n.spot:
                 row["warnings"].append("node is on-demand; dual mode needs "
                                        "spot to reclaim")

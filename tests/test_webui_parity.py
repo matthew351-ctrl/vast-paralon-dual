@@ -109,7 +109,8 @@ class ShortStates(unittest.TestCase):
 
     def test_cards_and_table_use_them(self):
         self.assertIn('stateEl(vastState(m))', js_function("card"))
-        self.assertIn('stateEl(paralonState(m))', js_function("card"))
+        self.assertIn('paralonStateEl(m, s)', js_function("card"))
+        self.assertIn('stateEl(paralonState(m))', js_function("paralonStateEl"))
         cols = js_function("tableCols")
         labels = re.findall(r'label: "([^"]+)"', cols)
         self.assertEqual(labels, ["Machine", "Mode", "Status", "Vast",

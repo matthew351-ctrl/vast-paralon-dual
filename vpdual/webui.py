@@ -72,7 +72,7 @@ from .doctor import FAIL, run_checks
 from .engine import Controller
 from .state import MODES, StateStore
 from .paralon import ParalonError
-from .status import snapshot_path, status_data
+from .status import read_age_limits, snapshot_path, status_data
 from .vast import VastError
 
 log = logging.getLogger("vpdual.ui")
@@ -299,9 +299,11 @@ class UIApp:
             return data
 
     def _finish(self, data):
+        slow, stale = read_age_limits(self.cfg)
         data.update(ok=True, version=__version__,
                     generated_at=int(self.clock()), refresh_s=REFRESH_S,
                     apply_within_s=self.cfg.poll_interval_s,
+                    paralon_read_slow_s=slow, paralon_read_stale_s=stale,
                     dry_run=self.dry_run, modes=list(MODES))
         return data
 
@@ -1256,7 +1258,10 @@ const HELP = {
     "per hour.",
   paralon_state: "rented: a Paralon renter has the node. available: open " +
     "to new Paralon rentals. paused: not open to new rentals; the node " +
-    "stays registered.",
+    "stays registered. Vast only, not on Paralon: the machine's mode is " +
+    "vast (in amber, 'listed on both', if Paralon could rent the node " +
+    "anyway). read ... ago: the age of the node reading behind the state, " +
+    "amber when a read is late, red when the reads are failing.",
   paralon_type: "spot: a Paralon rental can be reclaimed (the renter gets " +
     "2 minutes' notice) when a Vast renter arrives. ON-DEMAND: it cannot " +
     "be reclaimed, so in dual mode both renters could share the GPU; " +
@@ -1694,6 +1699,25 @@ function vastState(m) {
     ": this tool unlisted it and owes the relist." : ".") +
     (stored ? " " + stored + " stored." : "")];
 }
+// v0.9.1: the engine's own test for OFFLINE (online false, or the state
+// says so); a snapshot from before 0.9.1 has no `online`.
+function paralonOnline(p) {
+  return p.online !== false && p.state !== "offline";
+}
+// The node reads PAUSED: online, closed to new rentals, not rented.
+function paralonPaused(m) {
+  const p = m.paralon;
+  return Boolean(p && p.error === null && !p.available && paralonOnline(p) &&
+    !paralonRented(m));
+}
+// v0.9.1: "this tool paused it and owes the un-pause" only while that pause
+// is WHY the node is off: the flag set and the node reads paused. An offline
+// node is off for another reason (its agent stopped under a Vast renter, say),
+// whatever the flag says. On a Vast-only machine the pause is its mode, owed
+// back only if the mode changes, so it is not said there either.
+function pausedByUs(m) {
+  return Boolean(m.took_off.paralon) && m.mode !== "vast" && paralonPaused(m);
+}
 function paralonState(m) {
   const p = m.paralon;
   if (p === null) return ["not read", "st-mut", "Paralon was not read: see " +
@@ -1701,18 +1725,59 @@ function paralonState(m) {
   if (p.error !== null) return ["not found", "st-bad", p.error];
   if (paralonRented(m)) return ["rented", "st-para", "A Paralon renter has " +
     "the node."];
+  const online = paralonOnline(p);
+  // v0.9.1: mode vast is Vast only: off Paralon is the plan, not a fault.
+  // The one fault is a node Paralon could rent all the same (online and
+  // available): then the machine is listed on both.
+  if (m.mode === "vast") return p.available && online ?
+    ["Vast only: listed on both", "st-warn", "Mode vast (Vast only), yet " +
+     "Paralon reads this node online and available, so the machine is " +
+     "listed on both. The service pauses it on its next pass; if this " +
+     "stays, see the last decisions."] :
+    ["Vast only, not on Paralon", "st-mut", "Mode vast: this machine is " +
+     "on Vast only, so the service keeps its Paralon node closed to new " +
+     "rentals (it stays registered). Paralon reports: " + p.state + "."];
   if (p.available) return ["available", "st-ok", "Open to new Paralon rentals."];
   if (vastRenters(m) > 0) return ["off: on Vast", "st-mut", "Not open to " +
-    "Paralon rentals while a Vast renter has the GPU" + (m.took_off.paralon ?
+    "Paralon rentals while a Vast renter has the GPU" + (pausedByUs(m) ?
     "; this tool paused it and owes the un-pause." : ".") +
     " Paralon reports: " + p.state + "."];
-  if (p.state === "offline") return ["offline", "st-warn", "Paralon reports " +
+  if (!online) return ["offline", "st-warn", "Paralon reports " +
     "the node offline: its agent is not connected" +
     (m.agent && m.agent.state ? " (agent " + m.agent.state + ")" : "") + "."];
   return ["paused", "st-mut", "Not open to new Paralon rentals; the node " +
-    "stays registered" + (m.took_off.paralon ?
+    "stays registered" + (pausedByUs(m) ?
     ". This tool paused it and owes the un-pause." : ".") +
     " Paralon reports: " + p.state + "."];
+}
+// v0.9.1: how old the node reading behind every Paralon state is (the
+// service's last good GET /nodes; no call of its own): dim within the slow
+// read cadence, amber past it, red past the point where the service treats
+// Paralon as unreadable (both limits come with the status).
+function readAgeEl(m, s) {
+  const p = m.paralon;
+  if (!p || p.error !== null || typeof p.read_at !== "number" ||
+      typeof s.generated_at !== "number") return null;
+  const ms = Math.max(0, s.generated_at - p.read_at) * 1000 +
+    (lastAt ? Math.max(0, Date.now() - lastAt) : 0);
+  const slow = s.paralon_read_slow_s, stale = s.paralon_read_stale_s;
+  const cls = ms > stale * 1000 ? "st-bad" : ms > slow * 1000 ? "st-warn" :
+    "st-mut";
+  const w = el("span", "readage");
+  w.append(" · ", tipWord("read " + ago(ms), cls, "How old this Paralon " +
+    "state is: the service's last good read of GET /nodes. It reads it at " +
+    "least every " + slow + " s (more often while a node is rented or a " +
+    "machine recovers), so the node can have changed since. Amber past " +
+    slow + " s: a read is late. Red past " + stale + " s: the reads are " +
+    "failing or not running, and the service holds."));
+  return w;
+}
+function paralonStateEl(m, s) {   // the state, then its reading's age
+  const w = el("span");
+  w.append(stateEl(paralonState(m)));
+  const age = readAgeEl(m, s);
+  if (age) w.append(age);
+  return w;
 }
 function tipWord(text, cls, sentence) {
   const b = el("button", "tipword" + (cls ? " " + cls : ""), text);
@@ -1735,7 +1800,7 @@ function askText(m) {
 function owedText(m) {
   const t = m.took_off, out = [];
   if (t.vast) out.push("Vast relist");
-  if (t.paralon) out.push("Paralon un-pause");
+  if (pausedByUs(m)) out.push("Paralon un-pause");
   if (t.agent) out.push("agent start");
   if (m.idle_job_stopped.length) out.push("idle job " + m.idle_job_stopped.join(", "));
   return out.join(", ");
@@ -1801,7 +1866,7 @@ function card(m, s) {
   ps.append(heading("Paralon"));
   if (m.paralon === null) ps.append(el("div", "line muted", "not read"));
   else if (m.paralon.error !== null) ps.append(el("div", "line", "not found"));
-  else ps.append(dl([["State", stateEl(paralonState(m)), "paralon_state"],
+  else ps.append(dl([["State", paralonStateEl(m, s), "paralon_state"],
                      ["Type", m.paralon.spot ? "spot" : "ON-DEMAND", "paralon_type"],
                      ["Price", cell(m.paralon.price), "paralon_price"]]));
   sides.append(vs, ps);
@@ -1925,9 +1990,11 @@ function tableCols(s) {
       return e ? segs(e) : el("span", "st-mut", NOTHING);
     }},
     {label: "Paralon", help: "paralon_state", primary: true, cell: (m) => {
-      const w = el("span", "nowrap");
-      w.append(stateEl(paralonState(m)));
-      if (m.paralon && m.paralon.error === null && !m.paralon.spot)
+      const w = paralonStateEl(m, s);
+      w.classList.add("nowrap");
+      // on-demand matters only where Paralon is in use: never on Vast only
+      if (m.paralon && m.paralon.error === null && !m.paralon.spot &&
+          m.mode !== "vast")
         w.append(onDemandEl(m));
       return w;
     }},
